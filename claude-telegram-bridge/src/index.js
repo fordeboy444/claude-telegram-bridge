@@ -6,6 +6,9 @@ import { loadConfig } from './config.js';
 import { createAuthMiddleware } from './auth.js';
 import { TmuxController } from './tmux/controller.js';
 import { TmuxMonitor } from './tmux/monitor.js';
+import { ClaudeSessionReader } from './tmux/session_reader.js';
+import { formatQuestionCard } from './tmux/question_handler.js';
+import { cleanTerminalOutput } from './tmux/formatter.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
 import { scanSkills, getBuiltInCommands } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView } from './skills/menu.js';
@@ -21,8 +24,17 @@ export function createBot(config, deps = {}) {
   let activeSessionName = null;
   let activeChatId = null;
   let activeMonitor = null;
+  let activeSessionReader = null;
   let pendingArgsSkill = null;
   let cachedSkills = [];
+
+  // Register bot commands
+  bot.telegram.setMyCommands([
+    { command: 'projects', description: 'Manage project folders & launch sessions' },
+    { command: 'skills', description: 'Browse and run Claude skills' },
+    { command: 'status', description: 'View current active session' },
+    { command: 'help', description: 'Help & usage guide' }
+  ]).catch(() => {});
 
   async function refreshSkills() {
     const localSkillsDir = path.join(process.cwd(), '.claude', 'skills');
@@ -41,7 +53,11 @@ export function createBot(config, deps = {}) {
   // Attach Whitelist Auth Guard
   bot.use(createAuthMiddleware(config.allowedUserIds));
 
-  function switchActiveSession(sessionName, chatId) {
+  function switchActiveSession(sessionName, chatId, projectPath) {
+    if (activeSessionReader) {
+      activeSessionReader.stop();
+      activeSessionReader = null;
+    }
     if (activeMonitor) {
       activeMonitor.stop();
       activeMonitor = null;
@@ -51,12 +67,53 @@ export function createBot(config, deps = {}) {
     activeChatId = chatId;
 
     if (sessionName && chatId) {
+      const resolvedProjectName = sessionName.replace(/^claude-/, '');
+      const resolvedProjectPath = projectPath || path.join(config.projectsDir, resolvedProjectName);
+
+      activeSessionReader = new ClaudeSessionReader();
+      activeSessionReader.start(
+        resolvedProjectPath,
+        async (event) => {
+          if (!activeChatId) return;
+          if (event.type === 'text' && event.content) {
+            const chunks = splitTelegramMessage(event.content, 4000);
+            for (const c of chunks) {
+              try {
+                await bot.telegram.sendMessage(activeChatId, `\`\`\`\n${c}\n\`\`\``, {
+                  parse_mode: 'Markdown'
+                });
+              } catch {
+                try {
+                  await bot.telegram.sendMessage(activeChatId, c);
+                } catch {}
+              }
+            }
+          } else if (event.type === 'question' && event.content) {
+            const card = formatQuestionCard(event.content);
+            try {
+              await bot.telegram.sendMessage(activeChatId, card.text, {
+                parse_mode: 'Markdown',
+                reply_markup: card.reply_markup
+              });
+            } catch {
+              try {
+                await bot.telegram.sendMessage(activeChatId, card.text);
+              } catch {}
+            }
+          }
+        },
+        config.pollIntervalMs
+      );
+
+      // Fallback monitor
       activeMonitor = new TmuxMonitor(tmux, sessionName, config.pollIntervalMs);
       let pendingOutput = '';
       let debounceTimer = null;
 
       activeMonitor.start((chunk) => {
-        pendingOutput += (pendingOutput ? '\n' : '') + chunk;
+        const cleaned = cleanTerminalOutput(chunk);
+        if (!cleaned) return;
+        pendingOutput += (pendingOutput ? '\n' : '') + cleaned;
         if (!debounceTimer) {
           debounceTimer = setTimeout(async () => {
             const textToSend = pendingOutput.trim();
@@ -73,9 +130,7 @@ export function createBot(config, deps = {}) {
               } catch {
                 try {
                   await bot.telegram.sendMessage(activeChatId, c);
-                } catch {
-                  // Ignore delivery errors on shutdown
-                }
+                } catch {}
               }
             }
           }, 1500);
@@ -198,7 +253,9 @@ export function createBot(config, deps = {}) {
     const projectName = ctx.match[1];
     await ctx.answerCbQuery('Starting fresh session...');
     const sessionName = await projectManager.startFreshSession(projectName);
-    switchActiveSession(sessionName, ctx.chat.id);
+    const projects = await projectManager.listProjects();
+    const proj = projects.find(p => p.name === projectName);
+    switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
     await ctx.reply(
       `🚀 *Fresh session started!*\nFocused on: \`${sessionName}\`\nSend any text message to interact.`,
       { parse_mode: 'Markdown' }
@@ -209,10 +266,21 @@ export function createBot(config, deps = {}) {
     const projectName = ctx.match[1];
     await projectManager.killProjectSessions(projectName);
     if (activeSessionName === `claude-${projectName}`) {
-      switchActiveSession(null, null);
+      switchActiveSession(null, null, null);
     }
     await ctx.answerCbQuery('Sessions terminated');
     await ctx.reply(`🛑 All sessions for \`${projectName}\` terminated.`, { parse_mode: 'Markdown' });
+  });
+
+  bot.action(/answer_q:(\d+)/, async (ctx) => {
+    const optionNumber = ctx.match[1];
+    if (activeSessionName) {
+      await tmux.sendKeys(activeSessionName, optionNumber, true);
+      await ctx.answerCbQuery(`Selected option ${optionNumber}`);
+      await ctx.reply(`Selected option ${optionNumber}`);
+    } else {
+      await ctx.answerCbQuery('No active session');
+    }
   });
 
   bot.action('noop', async (ctx) => {
@@ -258,6 +326,10 @@ export function createBot(config, deps = {}) {
       pendingArgsSkill
     }),
     stop: () => {
+      if (activeSessionReader) {
+        activeSessionReader.stop();
+        activeSessionReader = null;
+      }
       if (activeMonitor) {
         activeMonitor.stop();
         activeMonitor = null;

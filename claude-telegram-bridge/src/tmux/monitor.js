@@ -89,6 +89,9 @@ export class TmuxMonitor {
         this.isPolling = false;
       }
     }, this.pollIntervalMs);
+    if (this.timer.unref) {
+      this.timer.unref();
+    }
   }
 
   stop() {

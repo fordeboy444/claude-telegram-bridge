@@ -136,6 +136,9 @@ export class ClaudeSessionReader {
           }
         } catch {}
       }, pollIntervalMs);
+      if (this.pollingTimer.unref) {
+        this.pollingTimer.unref();
+      }
     });
   }
 
