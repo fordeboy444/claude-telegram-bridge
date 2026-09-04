@@ -1,0 +1,21 @@
+# [](https://core.telegram.org/bots/api#createchatinvitelink)\
+
+- **URL:** https://core.telegram.org/bots/api/available-methods/[](https://core.telegram.org/bots/api#createchatinvitelink)\
+- **Summary:** createChatInviteLink\ Use this method to create an additional invite link for a chat.
+
+# \
+
+createChatInviteLink\
+\
+Use this method to create an additional invite link for a chat. The bot must be an administrator in the chat for this to work and must have the appropriate administrator rights. The link can be revoked using the method [revokeChatInviteLink](https://core.telegram.org/bots/api#revokechatinvitelink)\
+. Returns the new invite link as [ChatInviteLink](https://core.telegram.org/bots/api#chatinvitelink)\
+ object.\
+\
+| Parameter | Type | Required | Description |\
+| --- | --- | --- | --- |\
+| chat_id | Integer or String | Yes | Unique identifier for the target chat or username of the target channel in the format `@username` |\
+| name | String | Optional | Invite link name; 0-32 characters |\
+| expire_date | Integer | Optional | Point in time (Unix timestamp) when the link will expire |\
+| member_limit | Integer | Optional | The maximum number of users that can be members of the chat simultaneously after joining the chat via this invite link; 1-99999 |\
+| creates_join_request | Boolean | Optional | _True_, if users joining the chat via the link need to be approved by chat administrators. If _True_, _member_limit_ can't be specified. |\
+\

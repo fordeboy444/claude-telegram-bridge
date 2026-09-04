@@ -1,0 +1,19 @@
+# [](https://core.telegram.org/bots/api#invoice)\
+
+- **URL:** https://core.telegram.org/bots/api/[](https://core.telegram.org/bots/api#payments)\/[](https://core.telegram.org/bots/api#invoice)\
+- **Summary:** This object contains basic information about an invoice.\ | title | String | Product name |\ | description | String | Product description |\ | start_parameter | String | Unique bot deep-linking parameter that can be used to generate this invoice |\ | currency | String | Three-letter ISO 4217...
+
+# \
+
+Invoice\
+\
+This object contains basic information about an invoice.\
+\
+| Field | Type | Description |\
+| --- | --- | --- |\
+| title | String | Product name |\
+| description | String | Product description |\
+| start_parameter | String | Unique bot deep-linking parameter that can be used to generate this invoice |\
+| currency | String | Three-letter ISO 4217 [currency](https://core.telegram.org/bots/payments#supported-currencies)<br> code, or “XTR” for payments in [Telegram Stars](https://t.me/BotNews/90) |\
+| total_amount | Integer | Total price in the _smallest units_ of the currency (integer, **not** float/double). For example, for a price of `US$ 1.45` pass `amount = 145`. See the _exp_ parameter in [currencies.json](https://core.telegram.org/bots/payments/currencies.json)<br>, it shows the number of digits past the decimal point for each currency (2 for the majority of currencies). |\
+\

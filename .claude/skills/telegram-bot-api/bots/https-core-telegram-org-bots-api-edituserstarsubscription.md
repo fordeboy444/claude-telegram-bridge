@@ -1,0 +1,17 @@
+# [](https://core.telegram.org/bots/api#edituserstarsubscription)\
+
+- **URL:** https://core.telegram.org/bots/api/[](https://core.telegram.org/bots/api#payments)\/[](https://core.telegram.org/bots/api#edituserstarsubscription)\
+- **Summary:** editUserStarSubscription\ Allows the bot to cancel or re-enable extension of a subscription paid in Telegram Stars.
+
+# \
+
+editUserStarSubscription\
+\
+Allows the bot to cancel or re-enable extension of a subscription paid in Telegram Stars. Returns _True_ on success.\
+\
+| Parameter | Type | Required | Description |\
+| --- | --- | --- | --- |\
+| user_id | Integer | Yes | Identifier of the user whose subscription will be edited |\
+| telegram_payment_charge_id | String | Yes | Telegram payment identifier for the subscription |\
+| is_canceled | Boolean | Yes | Pass _True_ to cancel extension of the user subscription; the subscription must be active up to the end of the current subscription period. Pass _False_ to allow the user to re-enable a subscription that was previously canceled by the bot. |\
+\

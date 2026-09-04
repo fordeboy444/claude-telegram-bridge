@@ -1,0 +1,18 @@
+{
+  "source_url": "https://core.telegram.org/bots/api",
+  "skill_name": "telegram-bot-api",
+  "skill_type": "api",
+  "api_name": "Telegram Bot API",
+  "description": "Reference for the Telegram Bot API. Use whenever the user asks about the Telegram Bot API HTTP API, REST endpoints, webhooks, authentication/API tokens, or needs developer/product documentation for Telegram Bot API. Cite source URLs when giving API details.",
+  "layout": "layered",
+  "page_count": 616,
+  "endpoint_count": 0,
+  "reason": "616 pages and 0 endpoints; thresholds are 100 pages / 51 endpoints",
+  "filters": {
+    "exclude_paths": [],
+    "include_paths": []
+  },
+  "workarounds": [],
+  "first_scraped": "2026-09-01T15:43:45Z",
+  "last_updated": "2026-09-01T15:43:45Z"
+}

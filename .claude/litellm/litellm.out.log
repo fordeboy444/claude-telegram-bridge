@@ -1,0 +1,67 @@
+
+   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+
+
+[1;37m#------------------------------------------------------------#[0m
+[1;37m#                                                            #[0m
+[1;37m#            'The thing I wish you improved is...'            #[0m
+[1;37m#        https://github.com/BerriAI/litellm/issues/new        #[0m
+[1;37m#                                                            #[0m
+[1;37m#------------------------------------------------------------#[0m
+
+ Thank you for using LiteLLM! - Krrish & Ishaan
+
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+
+
+[32mLiteLLM: Proxy initialized with Config, Set models:[0m
+[32m    gemini-3.8-flash[0m
+[32m    gemini-3.5-flash-lite[0m
+[32m    glm-5.3:cloud[0m
+[32m    glm-5.3-flash:cloud[0m
+[32m    deepseek-v4-flash:cloud[0m
+[32m    deepseek-v4-flash:0731-cloud[0m
+[32m    deepseek-v4-pro:cloud[0m
+[32m    deepseek-v4-pro:0813-cloud[0m
+[32m    kimi-k3:cloud[0m
+[32m    kimi-k2.7-code:cloud[0m
+[32m    kimi-k2.6:cloud[0m
+[32m    minimax-m3:cloud[0m
+[32m    minimax-m2.7:cloud[0m
+[32m    gemma4:cloud[0m
+[32m    gemma4:31b-cloud[0m
+[32m    qwen3.5:cloud[0m
+[32m    qwen3.5:397b-cloud[0m
+[32m    gpt-oss:cloud[0m
+[32m    gpt-oss:120b-cloud[0m
+[32m    gpt-oss:20b-cloud[0m
+[32m    glm-5.1:cloud[0m
+[32m    glm-5.2:cloud[0m
+[32m    mistral-large-3:cloud[0m
+[32m    mistral-large-3:675b-cloud[0m
+[32m    nemotron-3-nano:cloud[0m
+[32m    nemotron-3-nano:30b-cloud[0m
+[32m    nemotron-3-super:cloud[0m
+[32m    nemotron-3-ultra:cloud[0m
+INFO:     127.0.0.1:65165 - "GET /health/liveness HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65171 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65176 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65171 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49745 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49751 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49754 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49751 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49751 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49751 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49764 - "GET /models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49751 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49751 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49777 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49873 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK

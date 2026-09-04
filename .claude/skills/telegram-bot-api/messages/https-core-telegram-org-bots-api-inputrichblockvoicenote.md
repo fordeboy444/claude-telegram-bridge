@@ -1,0 +1,17 @@
+# [](https://core.telegram.org/bots/api#inputrichblockvoicenote)\
+
+- **URL:** https://core.telegram.org/bots/api/[](https://core.telegram.org/bots/api#rich-messages)\/[](https://core.telegram.org/bots/api#inputrichblockvoicenote)\
+- **Summary:** InputRichBlockVoiceNote\ A block with a voice note, corresponding to the HTML tag `<audio>`.\ | type | String | Type of the block, always “voice_note” |\ | voice_note | InputMediaVoiceNote | The voice note.
+
+# \
+
+InputRichBlockVoiceNote\
+\
+A block with a voice note, corresponding to the HTML tag `<audio>`.\
+\
+| Field | Type | Description |\
+| --- | --- | --- |\
+| type | String | Type of the block, always “voice_note” |\
+| voice_note | [InputMediaVoiceNote](https://core.telegram.org/bots/api#inputmediavoicenote) | The voice note. Caption is ignored. |\
+| caption | [RichBlockCaption](https://core.telegram.org/bots/api#richblockcaption) | _Optional_. Caption of the block |\
+\

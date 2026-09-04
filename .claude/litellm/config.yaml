@@ -1,0 +1,196 @@
+# Local LiteLLM proxy for Claude Code in relay-code-pi-development.
+# Project-local only: .claude/litellm/ is gitignored. Never commit or ship this file.
+# The Vertex SA JSON is referenced by path ONLY - never inline, log, or print its private_key.
+
+model_list:
+  # opus / sonnet / fable -> gemini-3.8-flash (speed-first all-Flash)
+  - model_name: gemini-3.8-flash
+    litellm_params:
+      model: vertex_ai/gemini-3.8-flash
+      vertex_project: automatic-bond-507214-q4
+      vertex_location: global
+      vertex_credentials: C:/Users/taro8/Documents/automatic-bond-507214-q4-509313207459.json
+      timeout: 300
+      num_retries: 2
+      # thinking: { type: "disabled" } drops the 50+ reasoning tokens on every turn for instantaneous first-token response
+      thinking:
+        type: "disabled"
+
+  # haiku -> gemini-3.5-flash-lite (background/cheap tier, ~0.7s latency)
+  - model_name: gemini-3.5-flash-lite
+    litellm_params:
+      model: vertex_ai/gemini-3.5-flash-lite
+      vertex_project: automatic-bond-507214-q4
+      vertex_location: global
+      vertex_credentials: C:/Users/taro8/Documents/automatic-bond-507214-q4-509313207459.json
+      timeout: 300
+      num_retries: 2
+
+  # -------------------------------------------------------------
+  # Ollama Cloud Models (routed via local Ollama daemon on 11434)
+  # -------------------------------------------------------------
+  - model_name: glm-5.3:cloud
+    litellm_params:
+      model: openai/glm-5.3:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: glm-5.3-flash:cloud
+    litellm_params:
+      model: openai/glm-5.3-flash:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: deepseek-v4-flash:cloud
+    litellm_params:
+      model: openai/deepseek-v4-flash:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: deepseek-v4-flash:0731-cloud
+    litellm_params:
+      model: openai/deepseek-v4-flash:0731-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: deepseek-v4-pro:cloud
+    litellm_params:
+      model: openai/deepseek-v4-pro:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: deepseek-v4-pro:0813-cloud
+    litellm_params:
+      model: openai/deepseek-v4-pro:0813-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: kimi-k3:cloud
+    litellm_params:
+      model: openai/kimi-k3:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: kimi-k2.7-code:cloud
+    litellm_params:
+      model: openai/kimi-k2.7-code:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: kimi-k2.6:cloud
+    litellm_params:
+      model: openai/kimi-k2.6:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: minimax-m3:cloud
+    litellm_params:
+      model: openai/minimax-m3:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: minimax-m2.7:cloud
+    litellm_params:
+      model: openai/minimax-m2.7:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: gemma4:cloud
+    litellm_params:
+      model: openai/gemma4:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: gemma4:31b-cloud
+    litellm_params:
+      model: openai/gemma4:31b-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: qwen3.5:cloud
+    litellm_params:
+      model: openai/qwen3.5:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: qwen3.5:397b-cloud
+    litellm_params:
+      model: openai/qwen3.5:397b-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: gpt-oss:cloud
+    litellm_params:
+      model: openai/gpt-oss:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: gpt-oss:120b-cloud
+    litellm_params:
+      model: openai/gpt-oss:120b-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: gpt-oss:20b-cloud
+    litellm_params:
+      model: openai/gpt-oss:20b-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: glm-5.1:cloud
+    litellm_params:
+      model: openai/glm-5.1:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: glm-5.2:cloud
+    litellm_params:
+      model: openai/glm-5.2:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: mistral-large-3:cloud
+    litellm_params:
+      model: openai/mistral-large-3:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: mistral-large-3:675b-cloud
+    litellm_params:
+      model: openai/mistral-large-3:675b-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: nemotron-3-nano:cloud
+    litellm_params:
+      model: openai/nemotron-3-nano:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: nemotron-3-nano:30b-cloud
+    litellm_params:
+      model: openai/nemotron-3-nano:30b-cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: nemotron-3-super:cloud
+    litellm_params:
+      model: openai/nemotron-3-super:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+  - model_name: nemotron-3-ultra:cloud
+    litellm_params:
+      model: openai/nemotron-3-ultra:cloud
+      api_base: http://localhost:11434/v1
+      api_key: ollama
+
+litellm_settings:
+  # Claude Code sends Anthropic-only params (cache_control, beta headers, ...).
+  # Drop what Gemini/Vertex/Ollama does not accept instead of failing the request.
+  drop_params: true
+
+general_settings:
+  # Literal local key is fine: gitignored dir, bound to 127.0.0.1.
+  # Must equal ANTHROPIC_AUTH_TOKEN in .claude/settings.local.json.
+  master_key: sk-litellm-relay-local-4f9c2be17a06d3

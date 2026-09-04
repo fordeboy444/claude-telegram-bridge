@@ -1,0 +1,25 @@
+# uniquegift
+
+- **URL:** https://core.telegram.org/bots/api/available-types/uniquegift
+- **Summary:** This object describes a unique gift that was upgraded from a regular gift. | gift_id | String | Identifier of the regular gift from which the gift was upgraded | | base_name | String | Human-readable name of the regular gift from which this unique gift was upgraded | | name | String | Unique name...
+
+# uniquegift
+
+UniqueGift
+
+This object describes a unique gift that was upgraded from a regular gift.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| gift_id | String | Identifier of the regular gift from which the gift was upgraded |
+| base_name | String | Human-readable name of the regular gift from which this unique gift was upgraded |
+| name | String | Unique name of the gift. This name can be used in `https://t.me/nft/...` links and story areas. |
+| number | Integer | Unique number of the upgraded gift among gifts upgraded from the same regular gift |
+| model | [UniqueGiftModel](https://core.telegram.org/bots/api#uniquegiftmodel) | Model of the gift |
+| symbol | [UniqueGiftSymbol](https://core.telegram.org/bots/api#uniquegiftsymbol) | Symbol of the gift |
+| backdrop | [UniqueGiftBackdrop](https://core.telegram.org/bots/api#uniquegiftbackdrop) | Backdrop of the gift |
+| is_premium | True | _Optional_. _True_, if the original regular gift was exclusively purchaseable by Telegram Premium subscribers |
+| is_burned | True | _Optional_. _True_, if the gift was used to craft another gift and isn't available anymore |
+| is_from_blockchain | True | _Optional_. _True_, if the gift is assigned from the TON blockchain and can't be resold or transferred in Telegram |
+| colors | [UniqueGiftColors](https://core.telegram.org/bots/api#uniquegiftcolors) | _Optional_. The color scheme that can be used by the gift's owner for the chat's name, replies to messages and link previews; for business account gifts and gifts that are currently on sale only |
+| publisher_chat | [Chat](https://core.telegram.org/bots/api#chat) | _Optional_. Information about the chat that published the gift |

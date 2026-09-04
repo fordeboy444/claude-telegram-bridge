@@ -1,0 +1,26 @@
+# [](https://core.telegram.org/bots/api#transactionpartner)\
+
+- **URL:** https://core.telegram.org/bots/api/[](https://core.telegram.org/bots/api#payments)\/[](https://core.telegram.org/bots/api#transactionpartner)\
+- **Summary:** This object describes the source of a transaction, or its recipient for outgoing transactions.
+
+# \
+
+TransactionPartner\
+\
+This object describes the source of a transaction, or its recipient for outgoing transactions. Currently, it can be one of\
+\
+*   [TransactionPartnerUser](https://core.telegram.org/bots/api#transactionpartneruser)\
+    \
+*   [TransactionPartnerChat](https://core.telegram.org/bots/api#transactionpartnerchat)\
+    \
+*   [TransactionPartnerAffiliateProgram](https://core.telegram.org/bots/api#transactionpartneraffiliateprogram)\
+    \
+*   [TransactionPartnerFragment](https://core.telegram.org/bots/api#transactionpartnerfragment)\
+    \
+*   [TransactionPartnerTelegramAds](https://core.telegram.org/bots/api#transactionpartnertelegramads)\
+    \
+*   [TransactionPartnerTelegramApi](https://core.telegram.org/bots/api#transactionpartnertelegramapi)\
+    \
+*   [TransactionPartnerOther](https://core.telegram.org/bots/api#transactionpartnerother)\
+    \
+\
