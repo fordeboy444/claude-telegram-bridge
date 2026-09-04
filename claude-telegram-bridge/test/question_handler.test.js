@@ -43,6 +43,26 @@ test('formatQuestionCard generates numbered emoji buttons with correct callback 
   assert.deepEqual(keyboard[2], [{ text: '3️⃣ Safe', callback_data: 'answer_q:3' }]);
 });
 
+test('formatQuestionCard handles plain string options and nested questions', () => {
+  const payloadNested = {
+    questions: [
+      {
+        question: 'Choose an option',
+        options: ['String Choice 1', 'String Choice 2']
+      }
+    ]
+  };
+
+  const card = formatQuestionCard(payloadNested);
+  assert.ok(card.text.includes('Choose an option'));
+  assert.ok(card.text.includes('1️⃣ *String Choice 1*'));
+  assert.ok(card.text.includes('2️⃣ *String Choice 2*'));
+
+  const keyboard = card.reply_markup.inline_keyboard;
+  assert.equal(keyboard.length, 2);
+  assert.deepEqual(keyboard[0], [{ text: '1️⃣ String Choice 1', callback_data: 'answer_q:1' }]);
+});
+
 test('formatQuestionCard handles options without descriptions gracefully', () => {
   const payload = {
     question: 'Continue?',

@@ -47,6 +47,30 @@ test('readOrcaProjects correlates projects with repo paths correctly', async () 
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+test('readOrcaProjects supports displayName and sourceRepoIds schema', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orca-test-schema-'));
+  const dataFile = path.join(tmpDir, 'orca-data.json');
+
+  const mockData = {
+    projects: [
+      { id: 'p-alt', displayName: 'Alternate Project', sourceRepoIds: ['r-alt'] }
+    ],
+    repos: [
+      { id: 'r-alt', path: 'C:/Users/taro8/Projects/alt' }
+    ]
+  };
+
+  await fs.writeFile(dataFile, JSON.stringify(mockData, null, 2), 'utf8');
+
+  const projects = await readOrcaProjects(dataFile);
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0].name, 'Alternate Project');
+  assert.equal(projects[0].displayName, 'Alternate Project');
+  assert.equal(projects[0].path, 'C:/Users/taro8/Projects/alt');
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
 test('readOrcaProjects handles missing or corrupted orca-data.json gracefully by returning []', async () => {
   const nonExistent = path.join(os.tmpdir(), 'non-existent-orca.json');
   const emptyRes = await readOrcaProjects(nonExistent);

@@ -16,7 +16,7 @@ test('ProjectManager discovers folders and correlates active tmux sessions', asy
     listSessions: async () => ['claude-web-backend']
   };
 
-  const manager = new ProjectManager(tmpDir, mockController);
+  const manager = new ProjectManager(tmpDir, mockController, { orcaReader: async () => [] });
   const list = await manager.listProjects();
 
   assert.equal(list.length, 2);

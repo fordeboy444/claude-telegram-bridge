@@ -76,10 +76,11 @@ export function createBot(config, deps = {}) {
         async (event) => {
           if (!activeChatId) return;
           if (event.type === 'text' && event.content) {
+            // Send assistant text from session_reader as clean markdown text rather than wrapping in code fences (```)
             const chunks = splitTelegramMessage(event.content, 4000);
             for (const c of chunks) {
               try {
-                await bot.telegram.sendMessage(activeChatId, `\`\`\`\n${c}\n\`\`\``, {
+                await bot.telegram.sendMessage(activeChatId, c, {
                   parse_mode: 'Markdown'
                 });
               } catch {
@@ -105,35 +106,45 @@ export function createBot(config, deps = {}) {
         config.pollIntervalMs
       );
 
-      // Fallback monitor
-      activeMonitor = new TmuxMonitor(tmux, sessionName, config.pollIntervalMs);
-      let pendingOutput = '';
-      let debounceTimer = null;
+      // Only start activeMonitor as fallback when no JSONL file is available or ClaudeSessionReader is not handling active output.
+      // To avoid simultaneous duplicate message sending when session reader is active, we can check if session reader finds a file or start monitor with fallback logic.
+      // Let's check if session reader finds latest file or start TmuxMonitor conditionally / with debounced check.
+      // Actually, standard fallback: if session reader runs, we only start TmuxMonitor if no jsonl session file is detected after 2 seconds, OR we run TmuxMonitor without sessionReader or let sessionReader take primary.
+      // Per prompt instructions: "Avoid simultaneous duplicate message sending: only start `activeMonitor` if `ClaudeSessionReader` is not active or as a fallback when no JSONL file is available."
 
-      activeMonitor.start((chunk) => {
-        const cleaned = cleanTerminalOutput(chunk);
-        if (!cleaned) return;
-        pendingOutput += (pendingOutput ? '\n' : '') + cleaned;
-        if (!debounceTimer) {
-          debounceTimer = setTimeout(async () => {
-            const textToSend = pendingOutput.trim();
-            pendingOutput = '';
-            debounceTimer = null;
-            if (!textToSend || !activeChatId) return;
+      activeSessionReader.findLatestSessionFile(resolvedProjectPath).then(latestFile => {
+        if (!latestFile && activeSessionName === sessionName && activeChatId === chatId) {
+          // Fallback monitor when no JSONL file is available
+          activeMonitor = new TmuxMonitor(tmux, sessionName, config.pollIntervalMs);
+          let pendingOutput = '';
+          let debounceTimer = null;
 
-            const chunks = splitTelegramMessage(textToSend, 4000);
-            for (const c of chunks) {
-              try {
-                await bot.telegram.sendMessage(activeChatId, `\`\`\`\n${c}\n\`\`\``, {
-                  parse_mode: 'Markdown'
-                });
-              } catch {
-                try {
-                  await bot.telegram.sendMessage(activeChatId, c);
-                } catch {}
-              }
+          activeMonitor.start((chunk) => {
+            const cleaned = cleanTerminalOutput(chunk);
+            if (!cleaned) return;
+            pendingOutput += (pendingOutput ? '\n' : '') + cleaned;
+            if (!debounceTimer) {
+              debounceTimer = setTimeout(async () => {
+                const textToSend = pendingOutput.trim();
+                pendingOutput = '';
+                debounceTimer = null;
+                if (!textToSend || !activeChatId) return;
+
+                const chunks = splitTelegramMessage(textToSend, 4000);
+                for (const c of chunks) {
+                  try {
+                    await bot.telegram.sendMessage(activeChatId, `\`\`\`\n${c}\n\`\`\``, {
+                      parse_mode: 'Markdown'
+                    });
+                  } catch {
+                    try {
+                      await bot.telegram.sendMessage(activeChatId, c);
+                    } catch {}
+                  }
+                }
+              }, 1500);
             }
-          }, 1500);
+          });
         }
       });
     }
@@ -252,9 +263,9 @@ export function createBot(config, deps = {}) {
   bot.action(/proj_start:(.+)/, async (ctx) => {
     const projectName = ctx.match[1];
     await ctx.answerCbQuery('Starting fresh session...');
-    const sessionName = await projectManager.startFreshSession(projectName);
     const projects = await projectManager.listProjects();
-    const proj = projects.find(p => p.name === projectName);
+    const proj = projects.find(p => p.name === projectName || p.displayName === projectName);
+    const sessionName = await projectManager.startFreshSession(projectName, proj ? proj.path : null);
     switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
     await ctx.reply(
       `🚀 *Fresh session started!*\nFocused on: \`${sessionName}\`\nSend any text message to interact.`,
@@ -264,10 +275,17 @@ export function createBot(config, deps = {}) {
 
   bot.action(/proj_kill:(.+)/, async (ctx) => {
     const projectName = ctx.match[1];
-    await projectManager.killProjectSessions(projectName);
-    if (activeSessionName === `claude-${projectName}`) {
+    const activeSessionNorm = activeSessionName ? activeSessionName.replace(/^claude-/, '') : '';
+    const targetNorm = projectManager.normalizeSessionName(projectName);
+    const expectedActiveSession = `claude-${targetNorm}`;
+
+    if (activeSessionName === expectedActiveSession) {
       switchActiveSession(null, null, null);
     }
+
+    await projectManager.killCurrentSession(projectName);
+    await projectManager.killProjectSessions(projectName);
+
     await ctx.answerCbQuery('Sessions terminated');
     await ctx.reply(`🛑 All sessions for \`${projectName}\` terminated.`, { parse_mode: 'Markdown' });
   });

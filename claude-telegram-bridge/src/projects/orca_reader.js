@@ -19,11 +19,21 @@ export function getDefaultOrcaDataPath() {
 
 /**
  * Reads and parses Orca workspace configuration, returning a list of projects correlated with repository paths.
+ * Supports both project.displayName || project.name and project.sourceRepoIds || project.repoIds.
  * @param {string} [filePath] Optional custom path to orca-data.json
  * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string}>>}
  */
 export async function readOrcaProjects(filePath = getDefaultOrcaDataPath()) {
   try {
+    // If using default path and file doesn't exist, return [] immediately so directory fallback works cleanly
+    if (filePath === getDefaultOrcaDataPath()) {
+      try {
+        await fs.access(filePath);
+      } catch {
+        return [];
+      }
+    }
+
     const content = await fs.readFile(filePath, 'utf8');
     const data = JSON.parse(content);
 
@@ -42,11 +52,15 @@ export async function readOrcaProjects(filePath = getDefaultOrcaDataPath()) {
 
     const results = [];
     for (const project of data.projects) {
-      if (!project || !project.name) continue;
+      if (!project) continue;
+      const projectName = project.name || project.displayName;
+      if (!projectName) continue;
+      const projectDisplayName = project.displayName || project.name;
 
+      const repoIds = project.sourceRepoIds || project.repoIds || [];
       let repoPath = null;
-      if (Array.isArray(project.repoIds) && project.repoIds.length > 0) {
-        for (const rId of project.repoIds) {
+      if (Array.isArray(repoIds) && repoIds.length > 0) {
+        for (const rId of repoIds) {
           if (reposMap.has(rId)) {
             repoPath = reposMap.get(rId);
             break;
@@ -55,8 +69,8 @@ export async function readOrcaProjects(filePath = getDefaultOrcaDataPath()) {
       }
 
       results.push({
-        name: project.name,
-        displayName: project.name,
+        name: projectName,
+        displayName: projectDisplayName,
         path: repoPath,
         kind: 'orca'
       });
