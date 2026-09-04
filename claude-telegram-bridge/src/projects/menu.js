@@ -7,7 +7,7 @@ export function buildProjectsMenu(projects) {
   }
 
   const keyboard = projects.map(p => {
-    const isRunning = p.runningSessions.length > 0;
+    const isRunning = p.runningSessions && p.runningSessions.length > 0;
     const badge = isRunning ? '🟢' : '⚪';
     const statusText = isRunning ? `(${p.runningSessions.length} active)` : '(idle)';
     return [
@@ -25,10 +25,10 @@ export function buildProjectsMenu(projects) {
 }
 
 export function buildProjectActionView(project) {
-  const isRunning = project.runningSessions.length > 0;
+  const isRunning = project.runningSessions && project.runningSessions.length > 0;
   const status = isRunning
-    ? `🟢 Running (${project.runningSessions.join(', ')})`
-    : '⚪ Idle';
+    ? `🟢 Active (Session: ${project.runningSessions[0]})`
+    : '⚪ No active current session in this project';
 
   const text = [
     `📁 *Project:* \`${project.name}\``,
@@ -38,20 +38,20 @@ export function buildProjectActionView(project) {
     'Choose an action below:'
   ].join('\n');
 
-  const keyboard = [
-    [
-      { text: '🚀 Start Fresh Session', callback_data: `proj_start:${project.name}` }
-    ]
-  ];
+  const keyboard = [];
 
   if (isRunning) {
     keyboard.push([
-      { text: '🛑 Kill All Sessions', callback_data: `proj_kill:${project.name}` }
+      { text: '🛑 Kill Current Session', callback_data: `proj_kill:${project.name}` }
+    ]);
+  } else {
+    keyboard.push([
+      { text: '🚀 Start Session', callback_data: `proj_start:${project.name}` }
     ]);
   }
 
   keyboard.push([
-    { text: '⬅️ Back to Projects', callback_data: 'projects_list' }
+    { text: '🔙 Back to Projects', callback_data: 'projects_list' }
   ]);
 
   return {

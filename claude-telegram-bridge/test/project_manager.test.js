@@ -29,6 +29,44 @@ test('ProjectManager discovers folders and correlates active tmux sessions', asy
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+test('ProjectManager uses orcaReader when provided', async () => {
+  const mockOrcaReader = async () => [
+    { name: 'Orca Project 1', displayName: 'Orca Project 1', path: '/orca/path/1', kind: 'orca' }
+  ];
+
+  const mockController = {
+    listSessions: async () => ['claude-Orca-Project-1']
+  };
+
+  const manager = new ProjectManager('/tmp/fallback', mockController, { orcaReader: mockOrcaReader });
+  const list = await manager.listProjects();
+
+  assert.equal(list.length, 1);
+  assert.equal(list[0].name, 'Orca Project 1');
+  assert.equal(list[0].path, '/orca/path/1');
+  assert.deepEqual(list[0].runningSessions, ['claude-Orca-Project-1']);
+});
+
+test('normalizeSessionName replaces spaces and special characters', async () => {
+  const manager = new ProjectManager('/tmp', {});
+  assert.equal(manager.normalizeSessionName('Main Agent'), 'Main-Agent');
+  assert.equal(manager.normalizeSessionName('foo/bar#baz'), 'foo-bar-baz');
+  assert.equal(manager.normalizeSessionName('test_project-123'), 'test_project-123');
+});
+
+test('killCurrentSession terminates only the current session for that project', async () => {
+  let killed = [];
+  const mockController = {
+    hasSession: async (name) => name === 'claude-Main-Agent',
+    killSession: async (name) => { killed.push(name); }
+  };
+
+  const manager = new ProjectManager('/tmp', mockController);
+  await manager.killCurrentSession('Main Agent');
+
+  assert.deepEqual(killed, ['claude-Main-Agent']);
+});
+
 test('ProjectManager starts a fresh session by terminating previous if existing', async () => {
   let killed = [];
   let created = [];
@@ -85,14 +123,14 @@ test('buildProjectActionView renders appropriate buttons based on running status
   const idleProj = { name: 'mobile-app', path: '/projects/mobile-app', runningSessions: [] };
   const idleView = buildProjectActionView(idleProj);
   assert.ok(idleView.text.includes('mobile-app'));
-  assert.ok(idleView.text.includes('⚪ Idle'));
+  assert.ok(idleView.text.includes('No active current session'));
   const idleButtons = idleView.reply_markup.inline_keyboard.flat();
-  assert.ok(idleButtons.some(b => b.text.includes('Start Fresh Session')));
-  assert.ok(!idleButtons.some(b => b.text.includes('Kill All Sessions')));
+  assert.ok(idleButtons.some(b => b.text.includes('Start Session')));
+  assert.ok(!idleButtons.some(b => b.text.includes('Kill Current Session')));
 
   const runningProj = { name: 'web-backend', path: '/projects/web-backend', runningSessions: ['claude-web-backend'] };
   const runningView = buildProjectActionView(runningProj);
-  assert.ok(runningView.text.includes('🟢 Running'));
+  assert.ok(runningView.text.includes('Active (Session: claude-web-backend)'));
   const runningButtons = runningView.reply_markup.inline_keyboard.flat();
-  assert.ok(runningButtons.some(b => b.text.includes('Kill All Sessions')));
+  assert.ok(runningButtons.some(b => b.text.includes('Kill Current Session')));
 });
