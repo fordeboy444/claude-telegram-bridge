@@ -39,6 +39,7 @@ export function createBot(config, deps = {}) {
   let typingChatId = null;
   let lastInjectedPrompt = null;
   let lastInjectedTime = 0;
+  let activeQuestion = null;
 
   function startTyping(chatId) {
     if (!chatId) return;
@@ -207,7 +208,11 @@ export function createBot(config, deps = {}) {
             }
           } else if (event.type === 'question' && event.content) {
             stopTyping();
-            const card = formatQuestionCard(event.content);
+            activeQuestion = {
+              payload: event.content,
+              selectedIndices: new Set()
+            };
+            const card = formatQuestionCard(event.content, activeQuestion.selectedIndices);
             await sendWithFallback(bot, activeChatId, card.text, { reply_markup: card.reply_markup });
           } else if (event.type === 'result') {
             // Turn ended (success or error), even with no final text block.
@@ -407,6 +412,7 @@ export function createBot(config, deps = {}) {
 
   bot.action(/answer_q:(\d+)/, async (ctx) => {
     const optionNumber = ctx.match[1];
+    activeQuestion = null;
     if (activeSessionName) {
       startTyping(ctx.chat?.id);
       await tmux.sendKeys(activeSessionName, optionNumber, true);
@@ -415,6 +421,71 @@ export function createBot(config, deps = {}) {
     } else {
       await ctx.answerCbQuery('No active session');
     }
+  });
+
+  bot.action(/toggle_q:(\d+)/, async (ctx) => {
+    const idx = parseInt(ctx.match[1], 10);
+    if (!activeQuestion) {
+      return ctx.answerCbQuery('Question expired or not found');
+    }
+
+    if (activeQuestion.selectedIndices.has(idx)) {
+      activeQuestion.selectedIndices.delete(idx);
+    } else {
+      activeQuestion.selectedIndices.add(idx);
+    }
+
+    const card = formatQuestionCard(activeQuestion.payload, activeQuestion.selectedIndices);
+    try {
+      await ctx.editMessageText(card.text, {
+        parse_mode: 'Markdown',
+        reply_markup: card.reply_markup
+      });
+    } catch {
+      // Ignore Telegram message not modified error
+    }
+    await ctx.answerCbQuery();
+  });
+
+  bot.action('submit_q', async (ctx) => {
+    if (!activeSessionName) {
+      return ctx.answerCbQuery('No active session');
+    }
+    if (!activeQuestion || !activeQuestion.payload) {
+      return ctx.answerCbQuery('No active question to submit');
+    }
+
+    const selected = Array.from(activeQuestion.selectedIndices).sort((a, b) => a - b);
+    if (selected.length === 0) {
+      return ctx.answerCbQuery('Please select at least one option');
+    }
+
+    // Convert multi-select toggles into arrow down & space bar keys sequence
+    // The cursor starts at index 0.
+    const keys = [];
+    let currentPos = 0;
+    for (const targetIdx of selected) {
+      while (currentPos < targetIdx) {
+        keys.push('Down');
+        currentPos++;
+      }
+      keys.push('Space');
+    }
+    keys.push('Enter');
+
+    startTyping(ctx.chat?.id);
+    if (typeof tmux.sendKeySequence === 'function') {
+      await tmux.sendKeySequence(activeSessionName, keys);
+    } else {
+      for (const k of keys) {
+        await tmux.sendKeys(activeSessionName, k === 'Enter' ? '' : k, k === 'Enter');
+      }
+    }
+
+    const selectedLabels = selected.map(i => i + 1).join(', ');
+    activeQuestion = null;
+    await ctx.answerCbQuery('Submitted answers');
+    await ctx.reply(`Submitted options: ${selectedLabels}`);
   });
 
   bot.action('noop', async (ctx) => {

@@ -71,6 +71,13 @@ export class TmuxController {
     await this.execAsync(cmd);
   }
 
+  async sendKeySequence(sessionName, keys = []) {
+    if (!keys || keys.length === 0) return;
+    const safeSession = sessionName.replace(/"/g, '\\"');
+    const cmds = keys.map(k => `${this.tmuxPath} send-keys -t "${safeSession}" ${k}`);
+    await this.execAsync(cmds.join(' && '));
+  }
+
   async capturePane(sessionName, startLine = -100) {
     try {
       const { stdout } = await this.execAsync(

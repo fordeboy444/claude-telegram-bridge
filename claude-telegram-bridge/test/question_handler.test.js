@@ -89,3 +89,35 @@ test('formatQuestionCard handles empty or undefined payloads gracefully', () => 
   assert.equal(typeof card3.text, 'string');
   assert.deepEqual(card3.reply_markup.inline_keyboard, []);
 });
+
+test('formatQuestionCard supports multiSelect mode with checkboxes and submit button', () => {
+  const payload = {
+    questions: [
+      {
+        question: 'Select multiple items:',
+        multiSelect: true,
+        options: [
+          { label: 'Item 1' },
+          { label: 'Item 2' },
+          { label: 'Item 3' }
+        ]
+      }
+    ]
+  };
+
+  const selected = new Set([1]); // Select Item 2 (index 1)
+  const card = formatQuestionCard(payload, selected);
+
+  assert.ok(card.multiSelect);
+  assert.ok(card.text.includes('Multiple Choice'));
+  assert.ok(card.text.includes('◻️ *Item 1*'));
+  assert.ok(card.text.includes('☑️ *Item 2*'));
+  assert.ok(card.text.includes('◻️ *Item 3*'));
+
+  const keyboard = card.reply_markup.inline_keyboard;
+  assert.equal(keyboard.length, 4); // 3 options + 1 submit button
+  assert.deepEqual(keyboard[0], [{ text: '◻️ 1️⃣ Item 1', callback_data: 'toggle_q:0' }]);
+  assert.deepEqual(keyboard[1], [{ text: '☑️ 2️⃣ Item 2', callback_data: 'toggle_q:1' }]);
+  assert.deepEqual(keyboard[2], [{ text: '◻️ 3️⃣ Item 3', callback_data: 'toggle_q:2' }]);
+  assert.deepEqual(keyboard[3], [{ text: '✅ Submit', callback_data: 'submit_q' }]);
+});

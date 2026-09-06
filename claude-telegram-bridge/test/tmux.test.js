@@ -144,3 +144,17 @@ test('TmuxController.getSessionOption returns null when option is unset', async 
   const value = await controller.getSessionOption('test-sess', '@claude_session_id');
   assert.equal(value, null);
 });
+
+test('TmuxController.sendKeySequence sends multiple keys in chained command', async () => {
+  let executedCmd = '';
+  const mockExec = (cmd, cb) => {
+    executedCmd = cmd;
+    cb(null, '', '');
+  };
+  const controller = new TmuxController('tmux', mockExec);
+  await controller.sendKeySequence('test-sess', ['Down', 'Space', 'Enter']);
+  assert.equal(
+    executedCmd,
+    'tmux send-keys -t "test-sess" Down && tmux send-keys -t "test-sess" Space && tmux send-keys -t "test-sess" Enter'
+  );
+});

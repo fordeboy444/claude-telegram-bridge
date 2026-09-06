@@ -136,6 +136,126 @@ test('answer_q callback query action injects option key/number into tmux via sen
   botInstance.stop();
 });
 
+test('toggle_q and submit_q handle multiSelect question answers with key sequence', async () => {
+  let toggleHandler = null;
+  let submitHandler = null;
+  let sentSequence = null;
+  let sentKeys = [];
+
+  const mockBot = {
+    use: () => {},
+    on: () => {},
+    command: () => {},
+    action: (pattern, handler) => {
+      const str = pattern.toString();
+      if (str.includes('toggle_q')) {
+        toggleHandler = handler;
+      } else if (str.includes('submit_q')) {
+        submitHandler = handler;
+      }
+    },
+    telegram: {
+      setMyCommands: async () => {},
+      sendChatAction: async () => {}
+    }
+  };
+
+  const mockTmux = {
+    hasSession: async () => true,
+    capturePane: async () => '',
+    sendKeys: async (session, keys, enter) => {
+      sentKeys.push({ session, keys, enter });
+    },
+    sendKeySequence: async (session, keys) => {
+      sentSequence = { session, keys };
+    }
+  };
+
+  class MockReader {
+    start(projPath, onEvent) {
+      this.onEvent = onEvent;
+    }
+    stop() {}
+  }
+  let mockReaderInstance = null;
+
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111', '222'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  const botInstance = createBot(config, {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: function() {
+      mockReaderInstance = new MockReader();
+      return mockReaderInstance;
+    }
+  });
+
+  const { switchActiveSession } = botInstance;
+  switchActiveSession('claude-test', 12345);
+
+  assert.ok(toggleHandler, 'toggle_q action registered');
+  assert.ok(submitHandler, 'submit_q action registered');
+
+  // Trigger question event with multiSelect
+  let sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text, extra) => {
+    sentMessages.push({ chatId, text, extra });
+  };
+
+  mockReaderInstance.onEvent({
+    type: 'question',
+    content: {
+      questions: [
+        {
+          question: 'Pick items',
+          multiSelect: true,
+          options: [{ label: 'Option 1' }, { label: 'Option 2' }, { label: 'Option 3' }]
+        }
+      ]
+    }
+  });
+
+  // Toggle option 0 and option 2
+  let editedMarkup = null;
+  const mockToggleCtx1 = {
+    match: ['toggle_q:0', '0'],
+    editMessageText: async (text, extra) => { editedMarkup = extra.reply_markup; },
+    answerCbQuery: async () => {}
+  };
+  await toggleHandler(mockToggleCtx1);
+
+  const mockToggleCtx2 = {
+    match: ['toggle_q:2', '2'],
+    editMessageText: async (text, extra) => { editedMarkup = extra.reply_markup; },
+    answerCbQuery: async () => {}
+  };
+  await toggleHandler(mockToggleCtx2);
+
+  // Submit options 0 and 2
+  let submitAnswered = false;
+  let submitReply = null;
+  const mockSubmitCtx = {
+    chat: { id: 12345 },
+    answerCbQuery: async (msg) => { submitAnswered = msg; },
+    reply: async (text) => { submitReply = text; }
+  };
+  await submitHandler(mockSubmitCtx);
+
+  assert.ok(sentSequence, 'sendKeySequence was called');
+  assert.equal(sentSequence.session, 'claude-test');
+  // At index 0: Space. Then to index 2: Down, Down, Space. Then submit: Enter.
+  assert.deepEqual(sentSequence.keys, ['Space', 'Down', 'Down', 'Space', 'Enter']);
+  assert.equal(submitReply, 'Submitted options: 1, 3');
+
+  botInstance.stop();
+});
+
 test('text handler routes direct slash commands to active tmux session', async () => {
   let textHandler = null;
   let sentKeys = [];
