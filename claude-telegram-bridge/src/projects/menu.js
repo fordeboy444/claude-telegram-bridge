@@ -42,6 +42,9 @@ export function buildProjectActionView(project) {
 
   if (isRunning) {
     keyboard.push([
+      { text: '🟢 Connect', callback_data: `proj_connect:${project.name}` }
+    ]);
+    keyboard.push([
       { text: '🛑 Kill Current Session', callback_data: `proj_kill:${project.name}` }
     ]);
   } else {

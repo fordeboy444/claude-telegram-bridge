@@ -155,10 +155,14 @@ test('buildProjectActionView renders appropriate buttons based on running status
   const idleButtons = idleView.reply_markup.inline_keyboard.flat();
   assert.ok(idleButtons.some(b => b.text.includes('Start Session')));
   assert.ok(!idleButtons.some(b => b.text.includes('Kill Current Session')));
+  assert.ok(!idleButtons.some(b => b.text.includes('Connect')), 'idle project must not offer Connect');
 
   const runningProj = { name: 'web-backend', path: '/projects/web-backend', runningSessions: ['claude-web-backend'] };
   const runningView = buildProjectActionView(runningProj);
   assert.ok(runningView.text.includes('Active (Session: claude-web-backend)'));
   const runningButtons = runningView.reply_markup.inline_keyboard.flat();
   assert.ok(runningButtons.some(b => b.text.includes('Kill Current Session')));
+  const connectButton = runningButtons.find(b => b.text.includes('Connect'));
+  assert.ok(connectButton, 'running project must offer Connect');
+  assert.equal(connectButton.callback_data, 'proj_connect:web-backend');
 });
