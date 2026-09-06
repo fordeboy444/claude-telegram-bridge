@@ -105,12 +105,14 @@ poetry run mypy src   # Type checking only
 
 This workspace uses the [Superpowers](https://github.com/obra/superpowers) plugin. Follow its skills:
 
-- **At the start of EVERY conversation, invoke BOTH `telegram-bot-api` and `onorca-api` skills before anything else** — this is the first action taken, before clarifying questions, exploration, or other skills
-- New feature / creative work → `superpowers:brainstorming` **before** planning or coding
-- Bugs, test failures, unexpected behavior → `superpowers:systematic-debugging` **before** proposing fixes
-- Plans → `superpowers: writing-plans`; execution →   `superpowers:subagent-driven-development`
-- Before claiming anything works → `superpowers:verification-before-completion` (run the command, show the output)
-- Invoke relevant skills before responding — including before clarifying questions
+- **Invoke `telegram-bot-api` or `onorca-api` skills when you do work related to Telegram or Orca** — invoke the skill before you do research, planning, or implementation for that topic.
+- **Skill Lifecycle & Manual Invocation Order**:
+  1. The user manually invokes `superpowers:brainstorming`.
+  2. When brainstorming is complete, tell the user to run `/clear`, then prompt to invoke `superpowers:writing-plans`.
+  3. When writing the plan is complete, tell the user to run `/clear`, then prompt to invoke `superpowers:subagent-driven-development`.
+  4. After subagent execution finishes, development completes.
+- Bugs, test failures, unexpected behavior → `superpowers:systematic-debugging` before proposing fixes.
+- Before claiming anything works → `superpowers:verification-before-completion` (run the command, show the output).
 
 ## Plan &amp; Spec File Naming (overrides plugin default)
 

@@ -353,6 +353,16 @@ export function createBot(config, deps = {}) {
     const proj = projects.find(p => p.name === projectName || p.displayName === projectName);
     const sessionName = await projectManager.startFreshSession(projectName, proj ? proj.path : null);
     await switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
+
+    // Re-render the action view so the user immediately sees Connect / Kill
+    // (End Session) buttons instead of the stale Start Session button.
+    const fresh = (await projectManager.listProjects()).find(
+      p => p.name === projectName || p.displayName === projectName
+    );
+    if (fresh) {
+      const view = buildProjectActionView(fresh);
+      await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
+    }
     await ctx.reply(
       `🚀 *Fresh session started!*\nFocused on: \`${sessionName}\`\nSend any text message to interact.`,
       { parse_mode: 'Markdown' }

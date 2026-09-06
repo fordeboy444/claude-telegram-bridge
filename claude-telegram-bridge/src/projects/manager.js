@@ -4,10 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { readOrcaProjects } from './orca_reader.js';
 
 export class ProjectManager {
+  // Windows interop: a bare `claude` is not on the WSL PATH (only claude.exe),
+  // so panes die instantly with "command not found" and the session with them.
   constructor(projectsDir, tmuxController, deps = {}) {
     this.projectsDir = projectsDir;
     this.controller = tmuxController;
     this.orcaReader = deps.orcaReader || readOrcaProjects;
+    this.cliExecutable = deps.cliExecutable
+      ?? (String(tmuxController?.tmuxPath || '').includes('wsl') ? 'claude.exe' : 'claude');
   }
 
   normalizeSessionName(name) {
@@ -79,7 +83,7 @@ export class ProjectManager {
     await this.controller.newSession(
       sessionName,
       resolvedPath,
-      `claude --session-id ${sessionId} --permission-mode bypassPermissions`
+      `${this.cliExecutable} --session-id ${sessionId} --permission-mode bypassPermissions`
     );
     await this.controller.setSessionOption(sessionName, '@claude_session_id', sessionId);
     return sessionName;
