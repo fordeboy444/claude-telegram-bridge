@@ -5,10 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig } from './config.js';
 import { createAuthMiddleware } from './auth.js';
 import { TmuxController } from './tmux/controller.js';
-import { TmuxMonitor } from './tmux/monitor.js';
 import { ClaudeSessionReader } from './tmux/session_reader.js';
 import { formatQuestionCard } from './tmux/question_handler.js';
-import { cleanTerminalOutput } from './tmux/formatter.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView } from './skills/menu.js';
@@ -33,7 +31,6 @@ export function createBot(config, deps = {}) {
   // State tracking
   let activeSessionName = null;
   let activeChatId = null;
-  let activeMonitor = null;
   let activeSessionReader = null;
   let pendingArgsSkill = null;
   let cachedSkills = [];
@@ -169,10 +166,6 @@ export function createBot(config, deps = {}) {
     if (activeSessionReader) {
       activeSessionReader.stop();
       activeSessionReader = null;
-    }
-    if (activeMonitor) {
-      activeMonitor.stop();
-      activeMonitor = null;
     }
     lastInjectedPrompt = null; // stale prompts must not suppress echoes in the new session
 
@@ -513,10 +506,6 @@ export function createBot(config, deps = {}) {
       if (activeSessionReader) {
         activeSessionReader.stop();
         activeSessionReader = null;
-      }
-      if (activeMonitor) {
-        activeMonitor.stop();
-        activeMonitor = null;
       }
     }
   };
