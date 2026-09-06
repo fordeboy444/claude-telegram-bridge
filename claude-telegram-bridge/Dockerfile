@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup non-root orca user matching Coolify volume ownership (UID 1000)
-RUN useradd -m -u 1000 -s /bin/bash orca \
+RUN usermod -l orca -d /home/orca -m node \
+    && groupmod -n orca node \
     && mkdir -p /opt/node-global /app \
     && chown -R orca:orca /opt/node-global /app
 
