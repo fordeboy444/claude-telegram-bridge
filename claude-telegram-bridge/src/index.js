@@ -59,6 +59,29 @@ export function createBot(config, deps = {}) {
     }
   }
 
+  // A dead tmux session must never receive injections or keep the typing
+  // indicator alive. One path clears the connection and reports the death.
+  async function notifySessionDeath(chatId) {
+    if (!activeSessionName) return; // already cleared: no double notification
+    switchActiveSession(null, null, null); // stops typing + reader, clears connection
+    if (chatId) {
+      await sendWithFallback(bot, chatId, '🔴 Session ended. Use /projects.');
+    }
+  }
+
+  async function ensureSessionAlive(ctx) {
+    if (!activeSessionName) return true;
+    let alive = true;
+    try {
+      alive = await tmux.hasSession(activeSessionName);
+    } catch {
+      alive = true; // cannot check: let the sendKeys path surface real errors
+    }
+    if (alive) return true;
+    await notifySessionDeath(ctx.chat.id);
+    return false;
+  }
+
   async function updateBotCommands() {
     const defaultCommands = [
       { command: 'projects', description: 'Manage project folders & launch sessions' },
