@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { readOrcaProjects } from './orca_reader.js';
 
 export class ProjectManager {
@@ -72,7 +73,15 @@ export class ProjectManager {
       await this.controller.killSession(sessionName);
     }
 
-    await this.controller.newSession(sessionName, resolvedPath, 'claude');
+    // A fixed session id makes the transcript filename deterministic, so the
+    // bridge can read exactly this session's transcript (no newest-file guessing).
+    const sessionId = randomUUID();
+    await this.controller.newSession(
+      sessionName,
+      resolvedPath,
+      `claude --session-id ${sessionId} --permission-mode bypassPermissions`
+    );
+    await this.controller.setSessionOption(sessionName, '@claude_session_id', sessionId);
     return sessionName;
   }
 
@@ -92,5 +101,11 @@ export class ProjectManager {
     for (const sess of toKill) {
       await this.controller.killSession(sess);
     }
+  }
+
+  async findProjectBySession(sessionName) {
+    if (!sessionName) return null;
+    const projects = await this.listProjects();
+    return projects.find(p => (p.runningSessions || []).includes(sessionName)) || null;
   }
 }

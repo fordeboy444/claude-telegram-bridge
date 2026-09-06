@@ -20,6 +20,30 @@ test('buildSkillsKeyboard paginates 6 items per page with navigation buttons', (
   assert.ok(navRow.some(b => b.callback_data === 'skills_page:1'));
 });
 
+test('buildSkillsKeyboard distinguishes commands and skills with different icons', () => {
+  const items = [
+    { id: 'builtin:clear', name: 'clear', command: '/clear' },
+    { id: 'skill:brainstorming', name: 'brainstorming', command: '/superpowers:brainstorming' }
+  ];
+
+  const menu = buildSkillsKeyboard(items, 0, 6);
+  const buttonTexts = menu.reply_markup.inline_keyboard.flat().map(b => b.text);
+
+  const commandBtn = buttonTexts.find(t => t.includes('clear'));
+  const skillBtn = buttonTexts.find(t => t.includes('brainstorming'));
+  assert.ok(commandBtn.startsWith('⌨️'), `expected command button to start with ⌨️, got: ${commandBtn}`);
+  assert.ok(skillBtn.startsWith('⚡'), `expected skill button to start with ⚡, got: ${skillBtn}`);
+  assert.notEqual(commandBtn[0], skillBtn[0]);
+});
+
+test('buildSkillInspectView shows the same icon as the browser list', () => {
+  const command = { id: 'builtin:clear', name: 'clear', description: 'Clear context', command: '/clear' };
+  const skill = { id: 'skill:brainstorming', name: 'Brainstorming', description: 'Explore ideas', command: '/superpowers:brainstorming' };
+
+  assert.ok(buildSkillInspectView(command).text.startsWith('⌨️'));
+  assert.ok(buildSkillInspectView(skill).text.startsWith('⚡'));
+});
+
 test('buildSkillInspectView generates Inspect card with Run buttons', () => {
   const skill = {
     id: 'skill:brainstorming',

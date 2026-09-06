@@ -114,3 +114,33 @@ test('TmuxController.capturePane returns empty string on session not found error
   const out = await controller.capturePane('missing-sess');
   assert.equal(out, '');
 });
+
+test('TmuxController.setSessionOption executes set-option with key and value', async () => {
+  let executedCmd = '';
+  const mockExec = (cmd, cb) => {
+    executedCmd = cmd;
+    cb(null, '', '');
+  };
+  const controller = new TmuxController('tmux', mockExec);
+  await controller.setSessionOption('test-sess', '@claude_session_id', 'uuid-1');
+  assert.equal(executedCmd, 'tmux set-option -t "test-sess" @claude_session_id "uuid-1"');
+});
+
+test('TmuxController.getSessionOption returns trimmed option value', async () => {
+  const mockExec = (cmd, cb) => {
+    assert.match(cmd, /show-options -v -t "test-sess" @claude_session_id/);
+    cb(null, 'uuid-1\n', '');
+  };
+  const controller = new TmuxController('tmux', mockExec);
+  const value = await controller.getSessionOption('test-sess', '@claude_session_id');
+  assert.equal(value, 'uuid-1');
+});
+
+test('TmuxController.getSessionOption returns null when option is unset', async () => {
+  const mockExec = (cmd, cb) => {
+    cb(new Error('unknown option: @claude_session_id'), '', '');
+  };
+  const controller = new TmuxController('tmux', mockExec);
+  const value = await controller.getSessionOption('test-sess', '@claude_session_id');
+  assert.equal(value, null);
+});

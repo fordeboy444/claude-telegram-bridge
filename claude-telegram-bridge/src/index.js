@@ -10,15 +10,25 @@ import { ClaudeSessionReader } from './tmux/session_reader.js';
 import { formatQuestionCard } from './tmux/question_handler.js';
 import { cleanTerminalOutput } from './tmux/formatter.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
-import { scanSkills, getBuiltInCommands } from './skills/scanner.js';
+import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView } from './skills/menu.js';
 import { ProjectManager } from './projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
+import { gatherDiagnostics, formatDiagnosticsMessage } from './diagnostics.js';
+import { sendWithFallback } from './utils/messenger.js';
+
+// If the daemon is launched from inside a Claude Code session (e.g. restarted
+// by an agent), CLAUDE_CODE_CHILD_SESSION leaks down the wsl.exe -> tmux ->
+// claude.exe chain. The tmux-spawned Claude CLI then treats itself as a child
+// session and disables transcript saving, starving ClaudeSessionReader.
+// Strip the marker so spawned sessions always run as top-level sessions.
+delete process.env.CLAUDE_CODE_CHILD_SESSION;
 
 export function createBot(config, deps = {}) {
   const bot = deps.bot || new Telegraf(config.botToken);
   const tmux = deps.tmux || new TmuxController(config.tmuxPath);
   const projectManager = deps.projectManager || new ProjectManager(config.projectsDir, tmux);
+  const SessionReaderClass = deps.sessionReaderClass || ClaudeSessionReader;
 
   // State tracking
   let activeSessionName = null;
@@ -27,33 +37,93 @@ export function createBot(config, deps = {}) {
   let activeSessionReader = null;
   let pendingArgsSkill = null;
   let cachedSkills = [];
+  let commandMapping = new Map();
+  let typingTimer = null;
+  let lastInjectedPrompt = null;
+  let lastInjectedTime = 0;
 
-  // Register bot commands
-  bot.telegram.setMyCommands([
-    { command: 'projects', description: 'Manage project folders & launch sessions' },
-    { command: 'skills', description: 'Browse and run Claude skills' },
-    { command: 'status', description: 'View current active session' },
-    { command: 'help', description: 'Help & usage guide' }
-  ]).catch(() => {});
+  function startTyping(chatId) {
+    if (!chatId || typingTimer) return;
+    const sendTyping = () => {
+      bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+    };
+    sendTyping();
+    typingTimer = setInterval(sendTyping, 4000);
+    if (typingTimer.unref) typingTimer.unref();
+  }
+
+  function stopTyping() {
+    if (typingTimer) {
+      clearInterval(typingTimer);
+      typingTimer = null;
+    }
+  }
+
+  async function updateBotCommands() {
+    const defaultCommands = [
+      { command: 'projects', description: 'Manage project folders & launch sessions' },
+      { command: 'skills', description: 'Browse and run Claude skills' },
+      { command: 'status', description: 'View current active session' },
+      { command: 'diag', description: 'Bridge health: sessions & skill sources' },
+      { command: 'help', description: 'Help & usage guide' }
+    ];
+
+    commandMapping.clear();
+    const telegramCommands = [...defaultCommands];
+    const registeredNames = new Set(defaultCommands.map(c => c.command));
+
+    for (const item of cachedSkills) {
+      if (telegramCommands.length >= 100) break; // Telegram max limit is 100 commands
+
+      const rawName = item.name || item.command.replace(/^\//, '');
+      const sanitized = sanitizeTelegramCommand(rawName);
+
+      if (sanitized && !registeredNames.has(sanitized)) {
+        registeredNames.add(sanitized);
+        commandMapping.set(sanitized, item);
+        telegramCommands.push({
+          command: sanitized,
+          description: (item.description || 'Run Claude command').slice(0, 100)
+        });
+      }
+    }
+
+    // Register for the default scope AND private chats. Telegram gives
+    // all_private_chats commands precedence in 1:1 chats, so a stale menu set
+    // there (e.g. by another tool sharing this bot token) would otherwise
+    // keep masking the freshly registered default menu.
+    const scopes = [{}, { scope: { type: 'all_private_chats' } }];
+    for (const extra of scopes) {
+      try {
+        await bot.telegram.setMyCommands(telegramCommands, extra);
+      } catch (err) {
+        console.warn('⚠️ Telegram command sync failed:', err.message);
+      }
+    }
+  }
 
   async function refreshSkills() {
-    const localSkillsDir = path.join(process.cwd(), '.claude', 'skills');
-    const userSkillsDir = path.join(os.homedir(), '.claude', 'skills');
-    const projectSkillsDir = activeSessionName
-      ? path.join(config.projectsDir, activeSessionName.replace(/^claude-/, ''), '.claude', 'skills')
-      : null;
-
-    const dirs = [localSkillsDir, userSkillsDir, projectSkillsDir].filter(Boolean);
+    const dirs = resolveSkillsDirectories({
+      cwd: process.cwd(),
+      home: os.homedir(),
+      projectsDir: config.projectsDir,
+      activeSessionName
+    });
     const scanned = await scanSkills(dirs);
     const builtins = getBuiltInCommands();
     cachedSkills = [...builtins, ...scanned];
+    await updateBotCommands();
     return cachedSkills;
   }
+
+  // Initial registration of commands
+  updateBotCommands();
 
   // Attach Whitelist Auth Guard
   bot.use(createAuthMiddleware(config.allowedUserIds));
 
-  function switchActiveSession(sessionName, chatId, projectPath) {
+  async function switchActiveSession(sessionName, chatId, projectPath) {
+    stopTyping();
     if (activeSessionReader) {
       activeSessionReader.stop();
       activeSessionReader = null;
@@ -62,91 +132,56 @@ export function createBot(config, deps = {}) {
       activeMonitor.stop();
       activeMonitor = null;
     }
+    lastInjectedPrompt = null; // stale prompts must not suppress echoes in the new session
 
     activeSessionName = sessionName;
     activeChatId = chatId;
 
     if (sessionName && chatId) {
+      refreshSkills().catch(err => console.warn('⚠️ Skill refresh failed:', err.message));
       const resolvedProjectName = sessionName.replace(/^claude-/, '');
       const resolvedProjectPath = projectPath || path.join(config.projectsDir, resolvedProjectName);
 
-      activeSessionReader = new ClaudeSessionReader();
+      // Bind the reader to this tmux session's own transcript. Sessions
+      // launched before session binding have no option -> null -> newest-file fallback.
+      let sessionId = null;
+      try {
+        sessionId = await tmux.getSessionOption(sessionName, '@claude_session_id');
+      } catch {
+        sessionId = null;
+      }
+
+      activeSessionReader = new SessionReaderClass();
       activeSessionReader.start(
         resolvedProjectPath,
         async (event) => {
           if (!activeChatId) return;
-          if (event.type === 'text' && event.content) {
+          if (event.type === 'user' && event.content) {
+            // If the user prompt came from CLI (not recently sent from Telegram), echo to Telegram
+            const isSelf = lastInjectedPrompt === event.content && (Date.now() - lastInjectedTime) < 10000;
+            if (!isSelf) {
+              await sendWithFallback(bot, activeChatId, `👤 *CLI User:*\n${event.content}`);
+            }
+            startTyping(activeChatId);
+          } else if (event.type === 'text' && event.content) {
+            stopTyping();
             // Send assistant text from session_reader as clean markdown text rather than wrapping in code fences (```)
             const chunks = splitTelegramMessage(event.content, 4000);
             for (const c of chunks) {
-              try {
-                await bot.telegram.sendMessage(activeChatId, c, {
-                  parse_mode: 'Markdown'
-                });
-              } catch {
-                try {
-                  await bot.telegram.sendMessage(activeChatId, c);
-                } catch {}
-              }
+              await sendWithFallback(bot, activeChatId, c);
             }
           } else if (event.type === 'question' && event.content) {
+            stopTyping();
             const card = formatQuestionCard(event.content);
-            try {
-              await bot.telegram.sendMessage(activeChatId, card.text, {
-                parse_mode: 'Markdown',
-                reply_markup: card.reply_markup
-              });
-            } catch {
-              try {
-                await bot.telegram.sendMessage(activeChatId, card.text);
-              } catch {}
-            }
+            await sendWithFallback(bot, activeChatId, card.text, { reply_markup: card.reply_markup });
+          } else if (event.type === 'result') {
+            // Turn ended (success or error), even with no final text block.
+            stopTyping();
           }
         },
-        config.pollIntervalMs
+        config.pollIntervalMs,
+        { sessionId }
       );
-
-      // Only start activeMonitor as fallback when no JSONL file is available or ClaudeSessionReader is not handling active output.
-      // To avoid simultaneous duplicate message sending when session reader is active, we can check if session reader finds a file or start monitor with fallback logic.
-      // Let's check if session reader finds latest file or start TmuxMonitor conditionally / with debounced check.
-      // Actually, standard fallback: if session reader runs, we only start TmuxMonitor if no jsonl session file is detected after 2 seconds, OR we run TmuxMonitor without sessionReader or let sessionReader take primary.
-      // Per prompt instructions: "Avoid simultaneous duplicate message sending: only start `activeMonitor` if `ClaudeSessionReader` is not active or as a fallback when no JSONL file is available."
-
-      activeSessionReader.findLatestSessionFile(resolvedProjectPath).then(latestFile => {
-        if (!latestFile && activeSessionName === sessionName && activeChatId === chatId) {
-          // Fallback monitor when no JSONL file is available
-          activeMonitor = new TmuxMonitor(tmux, sessionName, config.pollIntervalMs);
-          let pendingOutput = '';
-          let debounceTimer = null;
-
-          activeMonitor.start((chunk) => {
-            const cleaned = cleanTerminalOutput(chunk);
-            if (!cleaned) return;
-            pendingOutput += (pendingOutput ? '\n' : '') + cleaned;
-            if (!debounceTimer) {
-              debounceTimer = setTimeout(async () => {
-                const textToSend = pendingOutput.trim();
-                pendingOutput = '';
-                debounceTimer = null;
-                if (!textToSend || !activeChatId) return;
-
-                const chunks = splitTelegramMessage(textToSend, 4000);
-                for (const c of chunks) {
-                  try {
-                    await bot.telegram.sendMessage(activeChatId, `\`\`\`\n${c}\n\`\`\``, {
-                      parse_mode: 'Markdown'
-                    });
-                  } catch {
-                    try {
-                      await bot.telegram.sendMessage(activeChatId, c);
-                    } catch {}
-                  }
-                }
-              }, 1500);
-            }
-          });
-        }
-      });
     }
   }
 
@@ -158,6 +193,7 @@ export function createBot(config, deps = {}) {
       '• /projects - Manage project folders & launch sessions\n' +
       '• /skills - Browse and run Claude skills\n' +
       '• /status - View current active session\n' +
+      '• /diag - Bridge health: sessions & skill sources\n' +
       '• /help - Help & usage guide\n\n' +
       'Any text you send here will be forwarded directly to your active Claude Code session.',
       { parse_mode: 'Markdown' }
@@ -196,6 +232,20 @@ export function createBot(config, deps = {}) {
     await refreshSkills();
     const menu = buildSkillsKeyboard(cachedSkills, 0);
     await ctx.reply(menu.text, { parse_mode: 'Markdown', reply_markup: menu.reply_markup });
+  });
+
+  // Bridge health check. Named /diag to avoid clobbering the built-in
+  // claude CLI passthrough /doctor (typed commands map to tmux injection).
+  bot.command('diag', async (ctx) => {
+    await refreshSkills();
+    const diag = await gatherDiagnostics({
+      cwd: process.cwd(),
+      home: os.homedir(),
+      projectsDir: config.projectsDir,
+      activeSessionName,
+      tmux
+    });
+    await ctx.reply(formatDiagnosticsMessage(diag), { parse_mode: 'Markdown' });
   });
 
   // Callback Queries
@@ -266,7 +316,7 @@ export function createBot(config, deps = {}) {
     const projects = await projectManager.listProjects();
     const proj = projects.find(p => p.name === projectName || p.displayName === projectName);
     const sessionName = await projectManager.startFreshSession(projectName, proj ? proj.path : null);
-    switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
+    await switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
     await ctx.reply(
       `🚀 *Fresh session started!*\nFocused on: \`${sessionName}\`\nSend any text message to interact.`,
       { parse_mode: 'Markdown' }
@@ -324,26 +374,75 @@ export function createBot(config, deps = {}) {
       return ctx.reply(`⚡ Injected \`${fullCommand}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
     }
 
-    if (!activeSessionName) {
-      return ctx.reply(
-        '⚪ *No active Claude Code session connected.*\nUse /projects to select a project and start a session.',
-        { parse_mode: 'Markdown' }
-      );
+    // Direct slash command execution (e.g. /clear, /npm_package_flow, /context7_cli, etc.)
+    if (text.startsWith('/')) {
+      const parts = text.trim().split(/\s+/);
+      const cmdRaw = parts[0].slice(1); // remove leading '/'
+      const args = parts.slice(1).join(' ');
+
+      // Check if command matches our mapped commands
+      const matchedSkill = commandMapping.get(cmdRaw.toLowerCase());
+      if (matchedSkill) {
+        if (!activeSessionName) {
+          return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
+        }
+        const fullCmd = args ? `${matchedSkill.command} ${args}` : matchedSkill.command;
+        await tmux.sendKeys(activeSessionName, fullCmd, true);
+        return ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
+      }
     }
 
-    await tmux.sendKeys(activeSessionName, text, true);
+    if (!activeSessionName) {
+      // Auto-attach if an active tmux session exists
+      const sessions = await tmux.listSessions('claude-');
+      if (sessions.length > 1) {
+        return ctx.reply(
+          '⚪ Multiple active sessions found. Please use /projects to select one.',
+          { parse_mode: 'Markdown' }
+        );
+      }
+      if (sessions.length === 0) {
+        return ctx.reply(
+          '⚪ *No active Claude Code session found.*\nPlease run `connect` or use /projects to start one.',
+          { parse_mode: 'Markdown' }
+        );
+      }
+      // Exactly one session: attach, then fall through so the triggering text is forwarded.
+      const sessionName = sessions[0];
+      const proj = await projectManager.findProjectBySession(sessionName);
+      await switchActiveSession(sessionName, ctx.chat.id, proj?.path);
+      await ctx.reply(`🎯 Auto-connected to active session: \`${sessionName}\``, { parse_mode: 'Markdown' });
+    }
+
+    // Conversational text gets the prefix so the transcript (and Claude) can
+    // tell Telegram prompts apart from locally typed ones. Slash passthrough stays raw.
+    const injectText = text.startsWith('/') ? text : `Telegram user: ${text}`;
+    lastInjectedPrompt = injectText;
+    lastInjectedTime = Date.now();
+    startTyping(ctx.chat.id);
+    await tmux.sendKeys(activeSessionName, injectText, true);
   });
 
   return {
     bot,
     switchActiveSession,
     refreshSkills,
+    async attachExistingSession(chatId) {
+      const sessions = await tmux.listSessions('claude-');
+      if (sessions.length === 0) return null;
+      const sessionName = sessions[0];
+      const project = await projectManager.findProjectBySession(sessionName);
+      await switchActiveSession(sessionName, chatId, project?.path);
+      return sessionName;
+    },
     getActiveState: () => ({
       activeSessionName,
       activeChatId,
-      pendingArgsSkill
+      pendingArgsSkill,
+      typingActive: Boolean(typingTimer)
     }),
     stop: () => {
+      stopTyping();
       if (activeSessionReader) {
         activeSessionReader.stop();
         activeSessionReader = null;
@@ -362,6 +461,15 @@ if (isDirectExecution) {
   const config = loadConfig();
   const instance = createBot(config);
   await instance.refreshSkills();
+
+  // Re-attach to any live claude-* tmux session so skills & output streaming
+  // survive bridge restarts. chatId defaults to the first whitelisted user.
+  const attached = await instance
+    .attachExistingSession(Number(config.allowedUserIds[0]))
+    .catch(() => null);
+  if (attached) {
+    console.log(`🔗 Re-attached to existing session: ${attached}`);
+  }
 
   instance.bot.launch().then(() => {
     console.log('🤖 Claude Code Telegram Remote Bridge is running...');

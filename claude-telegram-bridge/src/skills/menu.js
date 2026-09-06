@@ -1,4 +1,9 @@
 // claude-telegram-bridge/src/skills/menu.js
+// Built-in commands (id `builtin:*`) get a keyboard icon; skills get a bolt
+export function getSkillIcon(item) {
+  return item?.id?.startsWith('builtin:') ? '⌨️' : '⚡';
+}
+
 export function buildSkillsKeyboard(skills, page = 0, pageSize = 6) {
   const totalPages = Math.ceil(skills.length / pageSize) || 1;
   const currentPage = Math.max(0, Math.min(page, totalPages - 1));
@@ -10,12 +15,12 @@ export function buildSkillsKeyboard(skills, page = 0, pageSize = 6) {
   for (let i = 0; i < currentSkills.length; i += 2) {
     const row = [];
     row.push({
-      text: `⚡ ${currentSkills[i].name}`,
+      text: `${getSkillIcon(currentSkills[i])} ${currentSkills[i].name}`,
       callback_data: `skill_inspect:${currentSkills[i].id}`
     });
     if (i + 1 < currentSkills.length) {
       row.push({
-        text: `⚡ ${currentSkills[i + 1].name}`,
+        text: `${getSkillIcon(currentSkills[i + 1])} ${currentSkills[i + 1].name}`,
         callback_data: `skill_inspect:${currentSkills[i + 1].id}`
       });
     }
@@ -47,7 +52,7 @@ export function buildSkillsKeyboard(skills, page = 0, pageSize = 6) {
 
 export function buildSkillInspectView(skill) {
   const text = [
-    `⚡ *${skill.name}*`,
+    `${getSkillIcon(skill)} *${skill.name}*`,
     `\`${skill.command}\``,
     '',
     `📖 *Description:*`,

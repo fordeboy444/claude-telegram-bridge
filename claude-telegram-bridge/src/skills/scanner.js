@@ -14,6 +14,31 @@ export function getBuiltInCommands() {
   ];
 }
 
+export function sanitizeTelegramCommand(name) {
+  if (!name) return '';
+  // Telegram command rules: 1-32 chars, only a-z, 0-9, and _
+  let clean = name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  // Remove consecutive underscores and trim leading/trailing underscores
+  clean = clean.replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  if (!clean) return '';
+  // If starts with a digit, prefix with 'cmd_'
+  if (/^[0-9]/.test(clean)) {
+    clean = `cmd_${clean}`;
+  }
+  return clean.slice(0, 32);
+}
+
+export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName }) {
+  const dirs = [
+    path.join(cwd, '.claude', 'skills'),
+    path.join(home, '.claude', 'skills')
+  ];
+  if (activeSessionName && projectsDir) {
+    dirs.push(path.join(projectsDir, activeSessionName.replace(/^claude-/, ''), '.claude', 'skills'));
+  }
+  return dirs;
+}
+
 export async function scanSkills(directories = []) {
   const results = [];
   const seenIds = new Set();
@@ -22,7 +47,8 @@ export async function scanSkills(directories = []) {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
+        // Support regular directories and symlinks pointing to directories
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
         const skillFilePath = path.join(dir, entry.name, 'SKILL.md');
         try {
           const content = await fs.readFile(skillFilePath, 'utf8');
@@ -41,11 +67,11 @@ export async function scanSkills(directories = []) {
             });
           }
         } catch {
-          // File does not exist or invalid YAML, skip
+          // File does not exist, invalid YAML, or broken symlink, skip
         }
       }
-    } catch {
-      // Directory cannot be read, continue to next
+    } catch (err) {
+      console.warn(`⚠️ Skills directory could not be read (${dir}):`, err.message);
     }
   }
 

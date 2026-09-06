@@ -70,11 +70,13 @@ test('killCurrentSession terminates only the current session for that project', 
 test('ProjectManager starts a fresh session by terminating previous if existing', async () => {
   let killed = [];
   let created = [];
+  let optionsSet = [];
 
   const mockController = {
     hasSession: async (name) => name === 'claude-web-backend',
     killSession: async (name) => { killed.push(name); },
-    newSession: async (name, cwd, cmd) => { created.push({ name, cwd, cmd }); }
+    newSession: async (name, cwd, cmd) => { created.push({ name, cwd, cmd }); },
+    setSessionOption: async (session, key, value) => { optionsSet.push({ session, key, value }); }
   };
 
   const manager = new ProjectManager('/tmp/projects', mockController);
@@ -84,6 +86,15 @@ test('ProjectManager starts a fresh session by terminating previous if existing'
   assert.deepEqual(killed, ['claude-web-backend']);
   assert.equal(created.length, 1);
   assert.equal(created[0].name, 'claude-web-backend');
+
+  // Launch command pins the session id so the bridge can bind the transcript
+  const match = created[0].cmd.match(/^claude --session-id ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) --permission-mode bypassPermissions$/);
+  assert.ok(match, `expected --session-id launch command, got: ${created[0].cmd}`);
+
+  assert.equal(optionsSet.length, 1);
+  assert.equal(optionsSet[0].session, 'claude-web-backend');
+  assert.equal(optionsSet[0].key, '@claude_session_id');
+  assert.equal(optionsSet[0].value, match[1]);
 });
 
 test('ProjectManager kills all sessions matching project prefix', async () => {
@@ -98,6 +109,23 @@ test('ProjectManager kills all sessions matching project prefix', async () => {
   await manager.killProjectSessions('web');
 
   assert.deepEqual(killed, ['claude-web', 'claude-web-worker']);
+});
+
+test('findProjectBySession resolves the project that owns a live session', async () => {
+  const mockController = {
+    listSessions: async () => ['claude-claude-code-telegram']
+  };
+  const manager = new ProjectManager('/tmp/projects', mockController, { orcaReader: async () => [
+    { name: 'claude-code-telegram', displayName: 'claude-code-telegram', path: 'C:/projects/claude-code-telegram', kind: 'orca' }
+  ] });
+
+  const match = await manager.findProjectBySession('claude-claude-code-telegram');
+  assert.ok(match, 'expected a project match for the live session');
+  assert.equal(match.name, 'claude-code-telegram');
+  assert.equal(match.path, 'C:/projects/claude-code-telegram');
+
+  const noMatch = await manager.findProjectBySession('claude-unknown-project');
+  assert.equal(noMatch, null);
 });
 
 test('buildProjectsMenu renders list with status badges', () => {

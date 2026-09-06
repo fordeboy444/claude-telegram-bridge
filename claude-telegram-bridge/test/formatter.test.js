@@ -47,3 +47,30 @@ test('cleanTerminalOutput strips terminal chrome, banners, boxes, and prompts', 
   assert.equal(cleaned.includes('console.log("hello");'), true);
 });
 
+test('cleanTerminalOutput strips model status lines and task list widgets', () => {
+  const terminalWithWidgets = `
+  GLM 5.3 Flash · ~\\Documents\\claude-code-projects\\Main Agent
+  1 awaiting input · 1 working · 4 completed
+
+  Needs input
+  * claude telegram bridge       What would you like to work on next?       1h
+
+  Working
+  * Tell me a...                 Tell me a joke about a cow                 0s
+
+  Completed
+  • joke delivery test           Joke delivered.                            3s
+  • inspect-analyze-video        CLAUDE.md updated with new workflow...     12m
+
+  Why did the cow cross the road? To get to the udder side!
+  `;
+  const cleaned = cleanTerminalOutput(terminalWithWidgets);
+  assert.equal(cleaned.includes('GLM 5.3 Flash'), false);
+  assert.equal(cleaned.includes('1 awaiting input'), false);
+  assert.equal(cleaned.includes('Needs input'), false);
+  assert.equal(cleaned.includes('claude telegram bridge'), false);
+  assert.equal(cleaned.includes('Completed'), false);
+  assert.equal(cleaned.includes('joke delivery test'), false);
+  assert.equal(cleaned.includes('Why did the cow cross the road?'), true);
+});
+

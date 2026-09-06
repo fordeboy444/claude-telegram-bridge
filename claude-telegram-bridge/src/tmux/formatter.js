@@ -42,6 +42,21 @@ export function cleanTerminalOutput(rawText) {
     if (/^\?\s+for help\s+·/i.test(trimmed) || /Ctrl\+[A-Z]/i.test(trimmed)) {
       return false;
     }
+    // Filter Claude/GLM status line widgets (e.g. "GLM 5.3 Flash · ...", "1 awaiting input · 1 working")
+    if (/(?:GLM|Claude|Sonnet|Opus|Haiku|GPT).+·/i.test(trimmed)) {
+      return false;
+    }
+    if (/\d+\s+awaiting input/i.test(trimmed) || /\d+\s+working\s+·/i.test(trimmed)) {
+      return false;
+    }
+    // Filter task dashboard sections
+    if (/^(Needs input|Working|Completed)$/i.test(trimmed)) {
+      return false;
+    }
+    // Filter task dashboard list items like "* claude telegram bridge ... 1h", "• joke delivery test ... 3s"
+    if (/^[*•]\s+.*(?:\d+[smhd]|\bworking\b|\binput\b)/i.test(trimmed)) {
+      return false;
+    }
     return true;
   });
   return filtered.join('\n').trim();

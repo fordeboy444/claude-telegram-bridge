@@ -34,9 +34,19 @@ export class TmuxController {
     }
   }
 
+  normalizePath(p) {
+    if (this.tmuxPath.includes('wsl') && /^[a-zA-Z]:[\\/]/.test(p)) {
+      const drive = p[0].toLowerCase();
+      const rest = p.slice(2).replace(/\\/g, '/');
+      return `/mnt/${drive}${rest.startsWith('/') ? rest : '/' + rest}`;
+    }
+    return p;
+  }
+
   async newSession(sessionName, cwd, command = 'claude') {
+    const targetCwd = this.normalizePath(cwd);
     const safeSession = sessionName.replace(/"/g, '\\"');
-    const safeCwd = cwd.replace(/"/g, '\\"');
+    const safeCwd = targetCwd.replace(/"/g, '\\"');
     const safeCmd = command.replace(/"/g, '\\"');
     const cmd = `${this.tmuxPath} new-session -d -s "${safeSession}" -c "${safeCwd}" "${safeCmd}"`;
     await this.execAsync(cmd);
@@ -72,6 +82,24 @@ export class TmuxController {
         return '';
       }
       throw err;
+    }
+  }
+
+  async setSessionOption(sessionName, key, value) {
+    const safeSession = sessionName.replace(/"/g, '\\"');
+    const safeValue = String(value).replace(/"/g, '\\"');
+    await this.execAsync(`${this.tmuxPath} set-option -t "${safeSession}" ${key} "${safeValue}"`);
+  }
+
+  async getSessionOption(sessionName, key) {
+    try {
+      const safeSession = sessionName.replace(/"/g, '\\"');
+      const { stdout } = await this.execAsync(`${this.tmuxPath} show-options -v -t "${safeSession}" ${key}`);
+      const value = stdout.trim();
+      return value || null;
+    } catch {
+      // Unset option or dead session -> caller falls back.
+      return null;
     }
   }
 }
