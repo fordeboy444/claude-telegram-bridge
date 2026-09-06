@@ -50,7 +50,19 @@ export function createBot(config, deps = {}) {
       clearInterval(typingTimer);
     }
     typingChatId = chatId;
-    const sendTyping = () => {
+    const sendTyping = async () => {
+      if (activeSessionName) {
+        let alive = true;
+        try {
+          alive = await tmux.hasSession(activeSessionName);
+        } catch {
+          alive = true;
+        }
+        if (!alive) {
+          await notifySessionDeath(chatId);
+          return;
+        }
+      }
       bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
     };
     sendTyping();
