@@ -323,6 +323,25 @@ export function createBot(config, deps = {}) {
     );
   });
 
+  bot.action(/proj_connect:(.+)/, async (ctx) => {
+    const projectName = ctx.match[1];
+    const projects = await projectManager.listProjects();
+    const proj = projects.find(p => p.name === projectName || p.displayName === projectName);
+    if (!proj) return ctx.answerCbQuery('Project not found');
+
+    const sessionName = proj.runningSessions && proj.runningSessions[0];
+    if (!sessionName || !(await tmux.hasSession(sessionName))) {
+      return ctx.answerCbQuery('Session not running');
+    }
+
+    const previous = activeSessionName;
+    await switchActiveSession(sessionName, ctx.chat.id, proj.path);
+    await ctx.answerCbQuery(`Connected to ${sessionName}`);
+    await ctx.reply(
+      `🔌 Connected to ${sessionName}${previous && previous !== sessionName ? ` (was ${previous})` : ''}`
+    );
+  });
+
   bot.action(/proj_kill:(.+)/, async (ctx) => {
     const projectName = ctx.match[1];
     const activeSessionNorm = activeSessionName ? activeSessionName.replace(/^claude-/, '') : '';

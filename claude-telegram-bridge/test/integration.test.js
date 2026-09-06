@@ -540,3 +540,127 @@ test('unmapped slash commands are injected without the Telegram user prefix', as
 
   botInstance.stop();
 });
+
+test('proj_connect swaps the active session and leaves the old one running', async () => {
+  let connectHandler = null;
+  const mockBot = {
+    use: () => {},
+    on: () => {},
+    command: () => {},
+    action: (regex, handler) => {
+      if (regex.toString().includes('proj_connect')) connectHandler = handler;
+    },
+    telegram: { setMyCommands: async () => {} }
+  };
+
+  const killed = [];
+  const mockTmux = {
+    hasSession: async () => true,
+    getSessionOption: async () => null,
+    sendKeys: async () => {},
+    killSession: async (name) => { killed.push(name); }
+  };
+
+  const mockProjectManager = {
+    listProjects: async () => [
+      { name: 'alpha', path: '/tmp/alpha', runningSessions: ['claude-alpha'] },
+      { name: 'beta', path: '/tmp/beta', runningSessions: ['claude-beta'] }
+    ],
+    findProjectBySession: async () => null
+  };
+
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  const readers = [];
+  class MockReader {
+    constructor() { this.startCalls = []; this.stopCalls = 0; readers.push(this); }
+    start(projectPath, onEvent, pollIntervalMs, options) { this.startCalls.push({ projectPath, options }); }
+    stop() { this.stopCalls++; }
+  }
+
+  const botInstance = createBot(config, {
+    bot: mockBot,
+    tmux: mockTmux,
+    projectManager: mockProjectManager,
+    sessionReaderClass: MockReader
+  });
+
+  // Currently connected to alpha
+  await botInstance.switchActiveSession('claude-alpha', 111, '/tmp/alpha');
+  assert.equal(readers.length, 1);
+
+  assert.ok(connectHandler, 'proj_connect action handler registered');
+  const replies = [];
+  const mockCtx = {
+    match: ['proj_connect:beta', 'beta'],
+    chat: { id: 111 },
+    answerCbQuery: async (msg) => { replies.push(`cb:${msg}`); },
+    reply: async (text) => { replies.push(text); }
+  };
+
+  await connectHandler(mockCtx);
+
+  // Old reader stopped, new reader started on beta's path, alpha never killed
+  assert.equal(readers.length, 2);
+  assert.equal(readers[0].stopCalls, 1);
+  assert.equal(readers[1].startCalls[0].projectPath, '/tmp/beta');
+  assert.equal(botInstance.getActiveState().activeSessionName, 'claude-beta');
+  assert.deepEqual(killed, []);
+  assert.ok(
+    replies.some(r => r.includes('claude-beta') && r.includes('claude-alpha')),
+    `expected old -> new note, got: ${replies.join(' | ')}`
+  );
+
+  botInstance.stop();
+});
+
+test('proj_connect answers Session not running when the session died before the tap', async () => {
+  let connectHandler = null;
+  const mockBot = {
+    use: () => {},
+    on: () => {},
+    command: () => {},
+    action: (regex, handler) => {
+      if (regex.toString().includes('proj_connect')) connectHandler = handler;
+    },
+    telegram: { setMyCommands: async () => {} }
+  };
+
+  const mockTmux = { hasSession: async () => false };
+  const mockProjectManager = {
+    listProjects: async () => [{ name: 'beta', path: '/tmp/beta', runningSessions: ['claude-beta'] }]
+  };
+
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  const botInstance = createBot(config, {
+    bot: mockBot,
+    tmux: mockTmux,
+    projectManager: mockProjectManager
+  });
+
+  const cbAnswers = [];
+  await connectHandler({
+    match: ['proj_connect:beta', 'beta'],
+    chat: { id: 111 },
+    answerCbQuery: async (m) => cbAnswers.push(m),
+    reply: async () => {}
+  });
+
+  assert.ok(cbAnswers.includes('Session not running'));
+  assert.equal(botInstance.getActiveState().activeSessionName, null);
+
+  botInstance.stop();
+});
