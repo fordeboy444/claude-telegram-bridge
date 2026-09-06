@@ -724,3 +724,62 @@ test('attachExistingSession attaches only when exactly one claude session runs',
   assert.equal(await zero.attachExistingSession(111), null);
   zero.stop();
 });
+
+test('incoming text to a dead session clears the connection and reports the ended session', async () => {
+  let textHandler = null;
+  const sentMessages = [];
+  const mockBot = {
+    use: () => {},
+    on: (evt, handler) => { if (evt === 'text') textHandler = handler; },
+    command: () => {},
+    action: () => {},
+    telegram: {
+      setMyCommands: async () => {},
+      sendChatAction: async () => {},
+      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
+    }
+  };
+
+  const sentKeys = [];
+  const mockTmux = {
+    hasSession: async () => false, // the connected tmux session died
+    getSessionOption: async () => null,
+    sendKeys: async (session, keys, enter) => { sentKeys.push({ session, keys, enter }); }
+  };
+
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  const readers = [];
+  class MockReader {
+    constructor() { this.stopCalls = 0; readers.push(this); }
+    start() {}
+    stop() { this.stopCalls++; }
+  }
+
+  const botInstance = createBot(config, {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  // notifySessionDeath sends the notice via bot.telegram.sendMessage
+  // (sendWithFallback), not ctx.reply — both reach the same chat.
+  await textHandler({ chat: { id: 12345 }, message: { text: 'hello' }, reply: async () => {} });
+
+  assert.equal(sentKeys.length, 0, 'no injection into a dead session');
+  assert.ok(
+    sentMessages.some(m => m.text.includes('🔴 Session ended')),
+    `expected ended-session notice, got: ${JSON.stringify(sentMessages)}`
+  );
+  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
+  assert.equal(readers[0].stopCalls, 1, 'reader stopped');
+
+  botInstance.stop();
+});
