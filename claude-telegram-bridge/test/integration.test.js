@@ -48,8 +48,8 @@ test('updateBotCommands logs a warning when Telegram command sync fails', async 
   const mockBot = {
     use: () => {},
     on: () => {},
-    action: () => {},
     command: () => {},
+    action: () => {},
     telegram: {
       setMyCommands: async () => {
         throw new Error('network down');
@@ -136,74 +136,6 @@ test('answer_q callback query action injects option key/number into tmux via sen
   botInstance.stop();
 });
 
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
-
 test('text handler routes direct slash commands to active tmux session', async () => {
   let textHandler = null;
   let sentKeys = [];
@@ -262,74 +194,6 @@ test('text handler routes direct slash commands to active tmux session', async (
   botInstance.stop();
 });
 
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
-
 test('text handler auto-attaches to single running session when activeSessionName is null', async () => {
   let textHandler = null;
   let sentKeys = [];
@@ -337,21 +201,22 @@ test('text handler auto-attaches to single running session when activeSessionNam
   const mockBot = {
     use: () => {},
     on: (evt, handler) => {
-      if (evt === 'text') textHandler = handler;
+      if (evt === 'text') {
+        textHandler = handler;
+      }
     },
     command: () => {},
     action: () => {},
     telegram: {
       setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => {
-        chatActions.push({ chatId, action });
-      }
+      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); }
     }
   };
 
   const mockTmux = {
-    listSessions: async (prefix) => ['claude-auto-project'],
     hasSession: async () => true,
+    listSessions: async () => ['claude-auto-project'],
+    getSessionOption: async () => null,
     sendKeys: async (session, keys, enter) => {
       sentKeys.push({ session, keys, enter });
     }
@@ -363,7 +228,7 @@ test('text handler auto-attaches to single running session when activeSessionNam
 
   const config = {
     botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
+    allowedUserIds: ['111', '222'],
     projectsDir: process.cwd(),
     tmuxPath: 'tmux',
     pollIntervalMs: 1000
@@ -392,74 +257,6 @@ test('text handler auto-attaches to single running session when activeSessionNam
 
   botInstance.stop();
 });
-
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
 
 test('switchActiveSession binds the reader to the tmux session id option', async () => {
   const mockBot = {
@@ -516,74 +313,6 @@ test('switchActiveSession binds the reader to the tmux session id option', async
   botInstance.stop();
 });
 
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
-
 test('switchActiveSession falls back to newest-file reading when the session has no stored session id', async () => {
   const mockBot = {
     use: () => {},
@@ -631,74 +360,6 @@ test('switchActiveSession falls back to newest-file reading when the session has
 
   botInstance.stop();
 });
-
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
 
 test('result events from the reader stop the typing indicator', async () => {
   const mockBot = {
@@ -760,74 +421,6 @@ test('result events from the reader stop the typing indicator', async () => {
 
   botInstance.stop();
 });
-
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
 
 test('plain text is injected with the Telegram user prefix and echo-suppressed', async () => {
   let textHandler = null;
@@ -898,74 +491,6 @@ test('plain text is injected with the Telegram user prefix and echo-suppressed',
   botInstance.stop();
 });
 
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
-
 test('unmapped slash commands are injected without the Telegram user prefix', async () => {
   let textHandler = null;
   const mockBot = {
@@ -1016,74 +541,6 @@ test('unmapped slash commands are injected without the Telegram user prefix', as
 
   botInstance.stop();
 });
-
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
 
 test('proj_connect swaps the active session and leaves the old one running', async () => {
   let connectHandler = null;
@@ -1164,74 +621,6 @@ test('proj_connect swaps the active session and leaves the old one running', asy
   botInstance.stop();
 });
 
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
-
 test('proj_connect answers Session not running when the session died before the tap', async () => {
   let connectHandler = null;
   const mockBot = {
@@ -1276,74 +665,6 @@ test('proj_connect answers Session not running when the session died before the 
 
   botInstance.stop();
 });
-
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
 
 test('attachExistingSession attaches only when exactly one claude session runs', async () => {
   const mockBot = {
@@ -1464,74 +785,6 @@ test('incoming text to a dead session clears the connection and reports the ende
   botInstance.stop();
 });
 
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
-
 test('typing starts on answer_q, skill_run_now, and skill args completion', async () => {
   const handlers = {};
   const mockBot = {
@@ -1611,74 +864,6 @@ test('typing starts on answer_q, skill_run_now, and skill args completion', asyn
 
   botInstance.stop();
 });
-
-test('typing tick detects a dead session, stops typing, and notifies once', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-
-  const chatActions = [];
-  const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
-
-  let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  let readerOnEvent = null;
-  class MockReader {
-    start(projectPath, onEvent) { readerOnEvent = onEvent; }
-    stop() {}
-  }
-
-  const botInstance = createBot(config, {
-    bot: mockBot,
-    tmux: mockTmux,
-    sessionReaderClass: MockReader
-  });
-  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
-
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
-
-  // Typing runs while the session is alive
-  await readerOnEvent({ type: 'user', content: 'hi' });
-  await flush();
-  await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
-
-  // The session dies; the next 4-second tick must notice
-  alive = false;
-  t.mock.timers.tick(4000);
-  await flush();
-  await flush();
-
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
-  assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
-  const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
-  assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
-
-  botInstance.stop();
-  t.mock.timers.reset();
-});
-
 
 test('startTyping rebinds to a new chat id instead of staying silent', async () => {
   const handlers = {};
@@ -1805,4 +990,3 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
   botInstance.stop();
   t.mock.timers.reset();
 });
-
