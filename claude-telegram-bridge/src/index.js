@@ -412,6 +412,7 @@ export function createBot(config, deps = {}) {
       if (!activeSessionName) {
         return ctx.reply('⚠️ No active Claude session. Use /projects to start one.');
       }
+      if (!(await ensureSessionAlive(ctx))) return;
       await tmux.sendKeys(activeSessionName, fullCommand, true);
       return ctx.reply(`⚡ Injected \`${fullCommand}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
     }
@@ -428,6 +429,7 @@ export function createBot(config, deps = {}) {
         if (!activeSessionName) {
           return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
         }
+        if (!(await ensureSessionAlive(ctx))) return;
         const fullCmd = args ? `${matchedSkill.command} ${args}` : matchedSkill.command;
         await tmux.sendKeys(activeSessionName, fullCmd, true);
         return ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
@@ -458,6 +460,7 @@ export function createBot(config, deps = {}) {
 
     // Conversational text gets the prefix so the transcript (and Claude) can
     // tell Telegram prompts apart from locally typed ones. Slash passthrough stays raw.
+    if (!(await ensureSessionAlive(ctx))) return;
     const injectText = text.startsWith('/') ? text : `Telegram user: ${text}`;
     lastInjectedPrompt = injectText;
     lastInjectedTime = Date.now();
