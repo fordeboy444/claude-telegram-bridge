@@ -783,3 +783,142 @@ test('incoming text to a dead session clears the connection and reports the ende
 
   botInstance.stop();
 });
+
+test('typing starts on answer_q, skill_run_now, and skill args completion', async () => {
+  const handlers = {};
+  const mockBot = {
+    use: () => {},
+    on: (evt, handler) => { if (evt === 'text') handlers.text = handler; },
+    command: () => {},
+    action: (regex, handler) => {
+      const key = regex.toString();
+      if (key.includes('answer_q')) handlers.answerQ = handler;
+      if (key.includes('skill_run_now')) handlers.skillRunNow = handler;
+      if (key.includes('skill_run_args')) handlers.skillRunArgs = handler;
+    },
+    telegram: { setMyCommands: async () => {}, sendChatAction: async () => {} }
+  };
+
+  const mockTmux = {
+    hasSession: async () => true,
+    getSessionOption: async () => null,
+    sendKeys: async () => {}
+  };
+
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(config, {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  // refreshSkills returns the cached list; built-in commands are always in it
+  const skills = await botInstance.refreshSkills();
+  assert.ok(skills.length > 0, 'expected at least one skill/command to be discovered');
+  const skill = skills[0];
+
+  // answer_q path
+  await handlers.answerQ({
+    match: ['answer_q:2', '2'],
+    chat: { id: 12345 },
+    answerCbQuery: async () => {},
+    reply: async () => {}
+  });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'answer_q must start typing');
+  await readerOnEvent({ type: 'result' }); // stop typing for the next case
+
+  // skill_run_now path
+  await handlers.skillRunNow({
+    match: [`skill_run_now:${skill.id}`, skill.id],
+    chat: { id: 12345 },
+    answerCbQuery: async () => {},
+    reply: async () => {}
+  });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'skill_run_now must start typing');
+  await readerOnEvent({ type: 'result' });
+
+  // skill args completion path (skill_run_args arms it, the next text completes it)
+  await handlers.skillRunArgs({
+    match: [`skill_run_args:${skill.id}`, skill.id],
+    chat: { id: 12345 },
+    answerCbQuery: async () => {},
+    reply: async () => {}
+  });
+  await handlers.text({ chat: { id: 12345 }, message: { text: 'extra args' }, reply: async () => {} });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'args completion must start typing');
+
+  botInstance.stop();
+});
+
+test('startTyping rebinds to a new chat id instead of staying silent', async () => {
+  const handlers = {};
+  const chatActions = [];
+  const mockBot = {
+    use: () => {},
+    on: (evt, handler) => { if (evt === 'text') handlers.text = handler; },
+    command: () => {},
+    action: (regex, handler) => {
+      if (regex.toString().includes('answer_q')) handlers.answerQ = handler;
+    },
+    telegram: {
+      setMyCommands: async () => {},
+      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); }
+    }
+  };
+
+  const mockTmux = {
+    hasSession: async () => true,
+    getSessionOption: async () => null,
+    sendKeys: async () => {}
+  };
+
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  class MockReader {
+    start() {}
+    stop() {}
+  }
+
+  const botInstance = createBot(config, {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 111, '/tmp/proj');
+
+  // Typing already active for chat 111 (text injection starts it)
+  await handlers.text({ chat: { id: 111 }, message: { text: 'hello' }, reply: async () => {} });
+  assert.equal(botInstance.getActiveState().typingActive, true);
+
+  // An answer from a different chat must rebind the indicator to that chat
+  await handlers.answerQ({
+    match: ['answer_q:1', '1'],
+    chat: { id: 222 },
+    answerCbQuery: async () => {},
+    reply: async () => {}
+  });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays active for the new chat');
+  assert.equal(chatActions[chatActions.length - 1].chatId, 222, 'typing indicator rebinds to the new chat id');
+
+  botInstance.stop();
+});

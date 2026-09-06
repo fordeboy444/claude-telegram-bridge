@@ -39,11 +39,17 @@ export function createBot(config, deps = {}) {
   let cachedSkills = [];
   let commandMapping = new Map();
   let typingTimer = null;
+  let typingChatId = null;
   let lastInjectedPrompt = null;
   let lastInjectedTime = 0;
 
   function startTyping(chatId) {
-    if (!chatId || typingTimer) return;
+    if (!chatId) return;
+    if (typingTimer) {
+      if (typingChatId === chatId) return;
+      clearInterval(typingTimer);
+    }
+    typingChatId = chatId;
     const sendTyping = () => {
       bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
     };
@@ -57,6 +63,7 @@ export function createBot(config, deps = {}) {
       clearInterval(typingTimer);
       typingTimer = null;
     }
+    typingChatId = null;
   }
 
   // A dead tmux session must never receive injections or keep the typing
@@ -297,6 +304,7 @@ export function createBot(config, deps = {}) {
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
 
+    startTyping(ctx.chat?.id);
     await tmux.sendKeys(activeSessionName, skill.command, true);
     await ctx.answerCbQuery(`Running ${skill.name}...`);
     await ctx.reply(`⚡ Injected \`${skill.command}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
@@ -385,6 +393,7 @@ export function createBot(config, deps = {}) {
   bot.action(/answer_q:(\d+)/, async (ctx) => {
     const optionNumber = ctx.match[1];
     if (activeSessionName) {
+      startTyping(ctx.chat?.id);
       await tmux.sendKeys(activeSessionName, optionNumber, true);
       await ctx.answerCbQuery(`Selected option ${optionNumber}`);
       await ctx.reply(`Selected option ${optionNumber}`);
@@ -413,6 +422,7 @@ export function createBot(config, deps = {}) {
         return ctx.reply('⚠️ No active Claude session. Use /projects to start one.');
       }
       if (!(await ensureSessionAlive(ctx))) return;
+      startTyping(ctx.chat.id);
       await tmux.sendKeys(activeSessionName, fullCommand, true);
       return ctx.reply(`⚡ Injected \`${fullCommand}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
     }
