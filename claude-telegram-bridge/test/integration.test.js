@@ -664,3 +664,63 @@ test('proj_connect answers Session not running when the session died before the 
 
   botInstance.stop();
 });
+
+test('attachExistingSession attaches only when exactly one claude session runs', async () => {
+  const mockBot = {
+    use: () => {},
+    on: () => {},
+    command: () => {},
+    action: () => {},
+    telegram: { setMyCommands: async () => {} }
+  };
+
+  const readers = [];
+  class MockReader {
+    constructor() { readers.push(this); }
+    start() {}
+    stop() {}
+  }
+
+  const makeTmux = (sessions) => ({
+    listSessions: async () => sessions,
+    getSessionOption: async () => null
+  });
+  const mockProjectManager = {
+    findProjectBySession: async () => ({ name: 'solo', path: '/tmp/solo' })
+  };
+  const config = {
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  };
+
+  const one = createBot(config, {
+    bot: mockBot,
+    tmux: makeTmux(['claude-solo']),
+    projectManager: mockProjectManager,
+    sessionReaderClass: MockReader
+  });
+  assert.equal(await one.attachExistingSession(111), 'claude-solo');
+  one.stop();
+
+  const two = createBot(config, {
+    bot: mockBot,
+    tmux: makeTmux(['claude-a', 'claude-b']),
+    projectManager: mockProjectManager,
+    sessionReaderClass: MockReader
+  });
+  assert.equal(await two.attachExistingSession(111), null);
+  assert.equal(two.getActiveState().activeSessionName, null);
+  two.stop();
+
+  const zero = createBot(config, {
+    bot: mockBot,
+    tmux: makeTmux([]),
+    projectManager: mockProjectManager,
+    sessionReaderClass: MockReader
+  });
+  assert.equal(await zero.attachExistingSession(111), null);
+  zero.stop();
+});

@@ -448,7 +448,7 @@ export function createBot(config, deps = {}) {
     refreshSkills,
     async attachExistingSession(chatId) {
       const sessions = await tmux.listSessions('claude-');
-      if (sessions.length === 0) return null;
+      if (sessions.length !== 1) return null;
       const sessionName = sessions[0];
       const project = await projectManager.findProjectBySession(sessionName);
       await switchActiveSession(sessionName, chatId, project?.path);
