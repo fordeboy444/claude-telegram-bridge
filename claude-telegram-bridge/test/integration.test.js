@@ -75,30 +75,39 @@ test('updateBotCommands logs a warning when Telegram command sync fails', async 
   );
 });
 
-test('answer_q callback query action injects option key/number into tmux via sendKeys', async () => {
-  let actionHandler = null;
-  let sentKeys = [];
+test('qa callback action answers a single-choice question with digit then Enter', async () => {
+  let qaHandler = null;
+  const sentSequences = [];
   const mockBot = {
     use: () => {},
     on: () => {},
     command: () => {},
-    action: (regex, handler) => {
-      if (regex.toString().includes('answer_q')) {
-        actionHandler = handler;
+    action: (pattern, handler) => {
+      if (pattern.toString().includes('qa:')) {
+        qaHandler = handler;
       }
     },
     telegram: {
-      setMyCommands: async () => {}
+      setMyCommands: async () => {},
+      sendMessage: async () => {},
+      sendChatAction: async () => {}
     }
   };
 
   const mockTmux = {
     hasSession: async () => true,
-    capturePane: async () => '',
-    sendKeys: async (session, keys, enter) => {
-      sentKeys.push({ session, keys, enter });
+    capturePane: async () => '❯ normal terminal output',
+    sendKeys: async () => {},
+    sendKeysWithDelay: async (session, keys) => {
+      sentSequences.push({ session, keys });
     }
   };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
 
   const config = {
     botToken: '123456:TEST_TOKEN',
@@ -108,38 +117,42 @@ test('answer_q callback query action injects option key/number into tmux via sen
     pollIntervalMs: 1000
   };
 
-  const botInstance = createBot(config, { bot: mockBot, tmux: mockTmux });
-  const { switchActiveSession } = botInstance;
+  const botInstance = createBot(config, { bot: mockBot, tmux: mockTmux, sessionReaderClass: MockReader });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
-  // Activate session
-  switchActiveSession('claude-test', 12345);
+  readerOnEvent({
+    type: 'question',
+    content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }
+  });
 
-  assert.ok(actionHandler, 'answer_q action handler registered');
+  assert.ok(qaHandler, 'qa action handler registered');
 
-  let answered = false;
-  let repliedText = null;
+  let cbAnswer = null;
+  let replyText = null;
   const mockCtx = {
-    match: ['answer_q:2', '2'],
-    answerCbQuery: async (msg) => { answered = msg; },
-    reply: async (text) => { repliedText = text; }
+    match: ['qa:0:1', '0', '1'],
+    chat: { id: 12345 },
+    answerCbQuery: async (msg) => { cbAnswer = msg; },
+    reply: async (text) => { replyText = text; }
   };
 
-  await actionHandler(mockCtx);
+  await qaHandler(mockCtx);
 
-  assert.equal(sentKeys.length, 1);
-  assert.equal(sentKeys[0].session, 'claude-test');
-  assert.equal(sentKeys[0].keys, '2');
-  assert.equal(sentKeys[0].enter, true);
-  assert.ok(answered);
-  assert.equal(repliedText, 'Selected option 2');
+  // Single-choice tap answers immediately: digit 2 selects and advances,
+  // Enter submits on the review screen.
+  assert.equal(sentSequences.length, 1);
+  assert.equal(sentSequences[0].session, 'claude-test');
+  assert.deepEqual(sentSequences[0].keys, ['2', 'Enter']);
+  assert.ok(cbAnswer);
+  assert.match(replyText, /submitted/i);
 
   botInstance.stop();
 });
 
-test('toggle_q and submit_q handle multiSelect question answers with key sequence', async () => {
-  let toggleHandler = null;
+test('qa toggle and submit_q handle multiSelect question answers with key sequence', async () => {
+  let qaHandler = null;
   let submitHandler = null;
-  let sentSequence = null;
+  const sentSequences = [];
   let sentKeys = [];
 
   const mockBot = {
@@ -148,8 +161,8 @@ test('toggle_q and submit_q handle multiSelect question answers with key sequenc
     command: () => {},
     action: (pattern, handler) => {
       const str = pattern.toString();
-      if (str.includes('toggle_q')) {
-        toggleHandler = handler;
+      if (str.includes('qa:')) {
+        qaHandler = handler;
       } else if (str.includes('submit_q')) {
         submitHandler = handler;
       }
@@ -162,12 +175,12 @@ test('toggle_q and submit_q handle multiSelect question answers with key sequenc
 
   const mockTmux = {
     hasSession: async () => true,
-    capturePane: async () => '',
+    capturePane: async () => '❯ normal terminal output',
     sendKeys: async (session, keys, enter) => {
       sentKeys.push({ session, keys, enter });
     },
-    sendKeySequence: async (session, keys) => {
-      sentSequence = { session, keys };
+    sendKeysWithDelay: async (session, keys) => {
+      sentSequences.push({ session, keys });
     }
   };
 
@@ -196,10 +209,9 @@ test('toggle_q and submit_q handle multiSelect question answers with key sequenc
     }
   });
 
-  const { switchActiveSession } = botInstance;
-  switchActiveSession('claude-test', 12345);
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
-  assert.ok(toggleHandler, 'toggle_q action registered');
+  assert.ok(qaHandler, 'qa action registered');
   assert.ok(submitHandler, 'submit_q action registered');
 
   // Trigger question event with multiSelect
@@ -224,18 +236,18 @@ test('toggle_q and submit_q handle multiSelect question answers with key sequenc
   // Toggle option 0 and option 2
   let editedMarkup = null;
   const mockToggleCtx1 = {
-    match: ['toggle_q:0', '0'],
+    match: ['qa:0:0', '0', '0'],
     editMessageText: async (text, extra) => { editedMarkup = extra.reply_markup; },
     answerCbQuery: async () => {}
   };
-  await toggleHandler(mockToggleCtx1);
+  await qaHandler(mockToggleCtx1);
 
   const mockToggleCtx2 = {
-    match: ['toggle_q:2', '2'],
+    match: ['qa:0:2', '0', '2'],
     editMessageText: async (text, extra) => { editedMarkup = extra.reply_markup; },
     answerCbQuery: async () => {}
   };
-  await toggleHandler(mockToggleCtx2);
+  await qaHandler(mockToggleCtx2);
 
   // Submit options 0 and 2
   let submitAnswered = false;
@@ -247,11 +259,12 @@ test('toggle_q and submit_q handle multiSelect question answers with key sequenc
   };
   await submitHandler(mockSubmitCtx);
 
-  assert.ok(sentSequence, 'sendKeySequence was called');
-  assert.equal(sentSequence.session, 'claude-test');
-  // At index 0: Space. Then to index 2: Down, Down, Space. Then submit: Enter.
-  assert.deepEqual(sentSequence.keys, ['Space', 'Down', 'Down', 'Space', 'Enter']);
-  assert.equal(submitReply, 'Submitted options: 1, 3');
+  assert.equal(sentSequences.length, 1, 'sendKeysWithDelay was called once');
+  assert.equal(sentSequences[0].session, 'claude-test');
+  // At index 0: Space. Then to index 2: Down, Down, Space. Right opens the
+  // review screen, Enter submits it.
+  assert.deepEqual(sentSequences[0].keys, ['Space', 'Down', 'Down', 'Space', 'Right', 'Enter']);
+  assert.match(submitReply, /submitted/i);
 
   botInstance.stop();
 });
@@ -905,7 +918,7 @@ test('incoming text to a dead session clears the connection and reports the ende
   botInstance.stop();
 });
 
-test('typing starts on answer_q, skill_run_now, and skill args completion', async () => {
+test('typing starts on qa answer, skill_run_now, and skill args completion', async () => {
   const handlers = {};
   const mockBot = {
     use: () => {},
@@ -913,17 +926,19 @@ test('typing starts on answer_q, skill_run_now, and skill args completion', asyn
     command: () => {},
     action: (regex, handler) => {
       const key = regex.toString();
-      if (key.includes('answer_q')) handlers.answerQ = handler;
+      if (key.includes('qa:')) handlers.answerQ = handler;
       if (key.includes('skill_run_now')) handlers.skillRunNow = handler;
       if (key.includes('skill_run_args')) handlers.skillRunArgs = handler;
     },
-    telegram: { setMyCommands: async () => {}, sendChatAction: async () => {} }
+    telegram: { setMyCommands: async () => {}, sendMessage: async () => {}, sendChatAction: async () => {} }
   };
 
   const mockTmux = {
     hasSession: async () => true,
     getSessionOption: async () => null,
-    sendKeys: async () => {}
+    capturePane: async () => '❯ normal terminal output',
+    sendKeys: async () => {},
+    sendKeysWithDelay: async () => {}
   };
 
   const config = {
@@ -952,9 +967,14 @@ test('typing starts on answer_q, skill_run_now, and skill args completion', asyn
   assert.ok(skills.length > 0, 'expected at least one skill/command to be discovered');
   const skill = skills[0];
 
-  // answer_q path
+  // Arm the question card, then answer via the qa action (single-choice tap
+  // submits immediately and must start typing).
+  readerOnEvent({
+    type: 'question',
+    content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
+  });
   await handlers.answerQ({
-    match: ['answer_q:2', '2'],
+    match: ['qa:0:1', '0', '1'],
     chat: { id: 12345 },
     answerCbQuery: async () => {},
     reply: async () => {}
@@ -993,10 +1013,11 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
     on: (evt, handler) => { if (evt === 'text') handlers.text = handler; },
     command: () => {},
     action: (regex, handler) => {
-      if (regex.toString().includes('answer_q')) handlers.answerQ = handler;
+      if (regex.toString().includes('qa:')) handlers.answerQ = handler;
     },
     telegram: {
       setMyCommands: async () => {},
+      sendMessage: async () => {},
       sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); }
     }
   };
@@ -1004,7 +1025,9 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   const mockTmux = {
     hasSession: async () => true,
     getSessionOption: async () => null,
-    sendKeys: async () => {}
+    capturePane: async () => '❯ normal terminal output',
+    sendKeys: async () => {},
+    sendKeysWithDelay: async () => {}
   };
 
   const config = {
@@ -1016,14 +1039,18 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   };
 
   class MockReader {
-    start() {}
+    start(projectPath, onEvent) { this.onEvent = onEvent; }
     stop() {}
   }
+  let mockReader = null;
 
   const botInstance = createBot(config, {
     bot: mockBot,
     tmux: mockTmux,
-    sessionReaderClass: MockReader
+    sessionReaderClass: function() {
+      mockReader = new MockReader();
+      return mockReader;
+    }
   });
   await botInstance.switchActiveSession('claude-test', 111, '/tmp/proj');
 
@@ -1031,9 +1058,14 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   await handlers.text({ chat: { id: 111 }, message: { text: 'hello' }, reply: async () => {} });
   assert.equal(botInstance.getActiveState().typingActive, true);
 
-  // An answer from a different chat must rebind the indicator to that chat
+  // Arm a single-choice question card, then answer from a different chat:
+  // the auto-submit must rebind the indicator to that chat.
+  mockReader.onEvent({
+    type: 'question',
+    content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
+  });
   await handlers.answerQ({
-    match: ['answer_q:1', '1'],
+    match: ['qa:0:1', '0', '1'],
     chat: { id: 222 },
     answerCbQuery: async () => {},
     reply: async () => {}
