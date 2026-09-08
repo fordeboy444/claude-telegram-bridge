@@ -1,0 +1,50 @@
+# Monaco editor & autosave — Orca Docs
+
+- **URL:** https://www.onorca.dev/docs/editing/monaco
+- **Summary:** Monaco editor & autosave — Orca documentation.
+
+Search docs⌘K
+
+Orca's code editor is Monaco — the same editor VS Code uses — with a few Orca-specific tweaks.
+
+Autosave
+--------
+
+Files save on blur and after short idle periods. There is no "dirty" dot because there are no unsaved changes in normal flow.
+
+Multi-cursor, go-to, find
+-------------------------
+
+*   `Cmd-D` — select next occurrence.
+*   `Cmd-F` / `Cmd-Shift-F` — file find / worktree find. File find seeds the search box from the current selection when text is selected.
+*   `Cmd-Click` — go to definition (where supported by language extensions).
+
+Changes view mode
+-----------------
+
+Toggle **Changes view mode** in any editor tab to flip the file into an in-tab HEAD-vs-working-tree diff without leaving your cursor position. Same shortcuts as the [Diff viewer](https://www.onorca.dev/docs/review/diff-viewer)
+ — `n`/`p` to walk hunks, `s` to stage. Toggle again to return to the regular file view.
+
+Word wrap
+---------
+
+File editors wrap long lines by default. Toggle **Word Wrap** from the editor tab's **⋯** menu, press `Alt+Z` (same as VS Code; remappable under [Settings → Shortcuts](https://www.onorca.dev/docs/settings)
+), or set the default under [Settings → General → Editor Word Wrap](https://www.onorca.dev/docs/settings)
+. This setting is separate from **Diff Word Wrap**, which only affects diff editors.
+
+Minimap
+-------
+
+A minimap is available in the file editor under [Settings → Appearance](https://www.onorca.dev/docs/settings)
+. It's off by default; turn it on if you prefer the VS Code-style overview rail.
+
+Custom editor font
+------------------
+
+By default the editor and diff views use the same font as the terminal. Leave **Editor Font Family** empty under [Settings → Appearance](https://www.onorca.dev/docs/settings)
+ to keep that link; set a font to override editors only (UI font stays separate).
+
+Language support
+----------------
+
+Syntax highlighting ships for the languages Monaco supports out of the box. Orca is intentionally editor-first, not IDE-first — run type-checkers and linters in a terminal pane.

@@ -1,0 +1,18 @@
+{
+  "source_url": "https://www.onorca.dev/docs",
+  "skill_name": "onorca-api",
+  "skill_type": "api",
+  "api_name": "Orca",
+  "description": "Reference for the Orca. Use whenever the user asks about the Orca HTTP API, REST endpoints, webhooks, authentication/API tokens, or needs developer/product documentation for Orca. Cite source URLs when giving API details.",
+  "layout": "layered",
+  "page_count": 57,
+  "endpoint_count": 0,
+  "reason": "57 pages and 0 endpoints; thresholds are 100 pages / 51 endpoints (override: layered)",
+  "filters": {
+    "exclude_paths": [],
+    "include_paths": []
+  },
+  "workarounds": [],
+  "first_scraped": "2026-09-01T15:54:43Z",
+  "last_updated": "2026-09-01T16:00:20Z"
+}
