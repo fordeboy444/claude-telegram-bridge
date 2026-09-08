@@ -6,7 +6,7 @@ import { loadConfig } from './config.js';
 import { createAuthMiddleware } from './auth.js';
 import { TmuxController } from './tmux/controller.js';
 import { ClaudeSessionReader } from './tmux/session_reader.js';
-import { formatQuestionCard, normalizeQuestions, buildAnswerKeys } from './tmux/question_handler.js';
+import { formatQuestionCard } from './tmux/question_handler.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView } from './skills/menu.js';
@@ -40,7 +40,6 @@ export function createBot(config, deps = {}) {
   let lastInjectedPrompt = null;
   let lastInjectedTime = 0;
   let activeQuestion = null;
-  let questionEventCounter = 0;
 
   function startTyping(chatId) {
     if (!chatId) return;
@@ -209,13 +208,11 @@ export function createBot(config, deps = {}) {
             }
           } else if (event.type === 'question' && event.content) {
             stopTyping();
-            questionEventCounter++;
-            const questions = normalizeQuestions(event.content);
             activeQuestion = {
-              questions,
-              answers: new Map()
+              payload: event.content,
+              selectedIndices: new Set()
             };
-            const card = formatQuestionCard(questions, activeQuestion.answers);
+            const card = formatQuestionCard(event.content, activeQuestion.selectedIndices);
             await sendWithFallback(bot, activeChatId, card.text, { reply_markup: card.reply_markup });
           } else if (event.type === 'result') {
             // Turn ended (success or error), even with no final text block.
@@ -413,118 +410,82 @@ export function createBot(config, deps = {}) {
     await ctx.reply(`🛑 All sessions for \`${projectName}\` terminated.`, { parse_mode: 'Markdown' });
   });
 
-  // After key playback the question modal should sit on its review screen
-  // ("Submit answers"). Claude Code redraws the modal between keystrokes and
-  // can drop a key, so verify the pane text and drive the modal home:
-  // Enter on the review screen, Right on a question page. Returns false when
-  // the modal stays open (keys lost or session dead). Aborts silently if a
-  // NEW question appears: a new modal means the old one already closed.
-  async function ensureModalSubmitted(sessionName, counterAtStart) {
-    for (let i = 0; i < 6; i++) {
-      await new Promise(r => setTimeout(r, 600));
-      if (questionEventCounter !== counterAtStart) return true;
-      let pane = '';
-      try {
-        pane = await tmux.capturePane(sessionName, -40);
-      } catch {
-        return false;
-      }
-      if (!pane.trim()) return false;
-      if (/Submit answers/.test(pane)) {
-        await tmux.sendKeysWithDelay(sessionName, ['Enter'], 200);
-      } else if (/Esc to cancel/.test(pane)) {
-        await tmux.sendKeysWithDelay(sessionName, ['Right'], 200);
-      } else {
-        return true; // modal gone: submitted
-      }
-    }
-    return false;
-  }
-
-  async function submitAnswers(ctx) {
-    const question = activeQuestion;
+  bot.action(/answer_q:(\d+)/, async (ctx) => {
+    const optionNumber = ctx.match[1];
     activeQuestion = null;
-    const counterAtStart = questionEventCounter;
-    startTyping(ctx.chat?.id);
-
-    const keys = buildAnswerKeys(question.questions, question.answers);
-    await tmux.sendKeysWithDelay(activeSessionName, keys, 300);
-
-    const ok = await ensureModalSubmitted(activeSessionName, counterAtStart);
-    if (ok) {
-      await ctx.answerCbQuery('Submitted answers');
-      await ctx.reply('📨 Answers submitted to Claude.');
+    if (activeSessionName) {
+      startTyping(ctx.chat?.id);
+      await tmux.sendKeys(activeSessionName, optionNumber, true);
+      await ctx.answerCbQuery(`Selected option ${optionNumber}`);
+      await ctx.reply(`Selected option ${optionNumber}`);
     } else {
-      stopTyping();
-      await ctx.answerCbQuery('Submit failed');
-      await ctx.reply(
-        '⚠️ Could not confirm the answer in the terminal. The question may still be open there.'
-      );
+      await ctx.answerCbQuery('No active session');
     }
-  }
+  });
 
-  bot.action(/qa:(\d+):(\d+)/, async (ctx) => {
-    const qi = parseInt(ctx.match[1], 10);
-    const oi = parseInt(ctx.match[2], 10);
+  bot.action(/toggle_q:(\d+)/, async (ctx) => {
+    const idx = parseInt(ctx.match[1], 10);
     if (!activeQuestion) {
       return ctx.answerCbQuery('Question expired or not found');
     }
-    const question = activeQuestion.questions[qi];
-    if (!question || !question.options[oi]) {
-      return ctx.answerCbQuery('Option not found');
-    }
 
-    if (question.multiSelect) {
-      const sel = activeQuestion.answers.get(qi) || new Set();
-      if (sel.has(oi)) {
-        sel.delete(oi);
-      } else {
-        sel.add(oi);
-      }
-      activeQuestion.answers.set(qi, sel);
+    if (activeQuestion.selectedIndices.has(idx)) {
+      activeQuestion.selectedIndices.delete(idx);
     } else {
-      activeQuestion.answers.set(qi, new Set([oi]));
+      activeQuestion.selectedIndices.add(idx);
     }
 
-    // Pure single-choice sets submit as soon as every question is answered.
-    const allSingleChoice = activeQuestion.questions.every(q => !q.multiSelect);
-    const allAnswered = activeQuestion.questions.every(
-      (q, i) => (activeQuestion.answers.get(i) || new Set()).size > 0
-    );
-
-    if (allSingleChoice && allAnswered) {
-      if (!activeSessionName) {
-        return ctx.answerCbQuery('No active session');
-      }
-      if (!(await ensureSessionAlive(ctx))) return;
-      await submitAnswers(ctx);
-    } else {
-      const card = formatQuestionCard(activeQuestion.questions, activeQuestion.answers);
-      try {
-        await ctx.editMessageText(card.text, {
-          parse_mode: 'Markdown',
-          reply_markup: card.reply_markup
-        });
-      } catch {
-        // Ignore Telegram message not modified error
-      }
-      await ctx.answerCbQuery();
+    const card = formatQuestionCard(activeQuestion.payload, activeQuestion.selectedIndices);
+    try {
+      await ctx.editMessageText(card.text, {
+        parse_mode: 'Markdown',
+        reply_markup: card.reply_markup
+      });
+    } catch {
+      // Ignore Telegram message not modified error
     }
+    await ctx.answerCbQuery();
   });
 
   bot.action('submit_q', async (ctx) => {
     if (!activeSessionName) {
       return ctx.answerCbQuery('No active session');
     }
-    if (!activeQuestion) {
+    if (!activeQuestion || !activeQuestion.payload) {
       return ctx.answerCbQuery('No active question to submit');
     }
-    const anyAnswered = [...activeQuestion.answers.values()].some(s => s.size > 0);
-    if (!anyAnswered) {
+
+    const selected = Array.from(activeQuestion.selectedIndices).sort((a, b) => a - b);
+    if (selected.length === 0) {
       return ctx.answerCbQuery('Please select at least one option');
     }
-    if (!(await ensureSessionAlive(ctx))) return;
-    await submitAnswers(ctx);
+
+    // Convert multi-select toggles into arrow down & space bar keys sequence
+    // The cursor starts at index 0.
+    const keys = [];
+    let currentPos = 0;
+    for (const targetIdx of selected) {
+      while (currentPos < targetIdx) {
+        keys.push('Down');
+        currentPos++;
+      }
+      keys.push('Space');
+    }
+    keys.push('Enter');
+
+    startTyping(ctx.chat?.id);
+    if (typeof tmux.sendKeySequence === 'function') {
+      await tmux.sendKeySequence(activeSessionName, keys);
+    } else {
+      for (const k of keys) {
+        await tmux.sendKeys(activeSessionName, k === 'Enter' ? '' : k, k === 'Enter');
+      }
+    }
+
+    const selectedLabels = selected.map(i => i + 1).join(', ');
+    activeQuestion = null;
+    await ctx.answerCbQuery('Submitted answers');
+    await ctx.reply(`Submitted options: ${selectedLabels}`);
   });
 
   bot.action('noop', async (ctx) => {
