@@ -26,13 +26,17 @@ export function sanitizeTelegramCommand(name) {
   return clean.slice(0, 32);
 }
 
+// Each directory carries the label shown to the user (📁 local / 🌐 global / project).
 export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName }) {
   const dirs = [
-    path.join(cwd, '.claude', 'skills'),
-    path.join(home, '.claude', 'skills')
+    { dir: path.join(cwd, '.claude', 'skills'), source: 'local' },
+    { dir: path.join(home, '.claude', 'skills'), source: 'global' }
   ];
   if (activeSessionName && projectsDir) {
-    dirs.push(path.join(projectsDir, activeSessionName.replace(/^claude-/, ''), '.claude', 'skills'));
+    dirs.push({
+      dir: path.join(projectsDir, activeSessionName.replace(/^claude-/, ''), '.claude', 'skills'),
+      source: 'project'
+    });
   }
   return dirs;
 }
@@ -41,7 +45,9 @@ export async function scanSkills(directories = []) {
   const results = [];
   const seenIds = new Set();
 
-  for (const dir of directories) {
+  for (const dirEntry of directories) {
+    const dir = typeof dirEntry === 'string' ? dirEntry : dirEntry.dir;
+    const source = typeof dirEntry === 'string' ? undefined : dirEntry.source;
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
@@ -61,7 +67,8 @@ export async function scanSkills(directories = []) {
               id,
               name,
               description: description.replace(/[*_`#]/g, '').trim(),
-              command: `/${name}`
+              command: `/${name}`,
+              source
             });
           }
         } catch {

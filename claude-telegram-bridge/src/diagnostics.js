@@ -13,7 +13,7 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
   const seen = new Set();
   let totalScannedSkills = 0;
 
-  for (const dir of dirs) {
+  for (const { dir, source } of dirs) {
     // Duplicate dirs (e.g. cwd === home) would double-count; dedup them
     if (seen.has(dir)) continue;
     seen.add(dir);
@@ -29,6 +29,7 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
     totalScannedSkills += skills.length;
     skillSources.push({
       dir,
+      source,
       exists,
       skillCount: skills.length,
       skillNames: skills.map(s => s.name)
@@ -86,7 +87,8 @@ export function formatDiagnosticsMessage(diag) {
   lines.push('🗂️ *Skill sources:*');
   for (const source of diag.skillSources) {
     const marker = source.exists ? '✅' : '❌';
-    lines.push(`${marker} \`${formatDirLabel(source.dir)}\` — ${source.skillCount} skill(s)`);
+    const label = source.source ? ` (${source.source})` : '';
+    lines.push(`${marker} \`${formatDirLabel(source.dir)}\`${label} — ${source.skillCount} skill(s)`);
     for (const name of source.skillNames) {
       lines.push(`   • ${name}`);
     }

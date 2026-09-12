@@ -28,9 +28,9 @@ test('resolveSkillsDirectories includes local, user and project skill dirs', () 
   });
 
   assert.deepEqual(dirs, [
-    path.join('/bridge', '.claude', 'skills'),
-    path.join('/home/user', '.claude', 'skills'),
-    path.join('/projects', 'my-app', '.claude', 'skills')
+    { dir: path.join('/bridge', '.claude', 'skills'), source: 'local' },
+    { dir: path.join('/home/user', '.claude', 'skills'), source: 'global' },
+    { dir: path.join('/projects', 'my-app', '.claude', 'skills'), source: 'project' }
   ]);
 });
 
@@ -43,8 +43,8 @@ test('resolveSkillsDirectories omits project dir when no session is active', () 
   });
 
   assert.deepEqual(dirs, [
-    path.join('/bridge', '.claude', 'skills'),
-    path.join('/home/user', '.claude', 'skills')
+    { dir: path.join('/bridge', '.claude', 'skills'), source: 'local' },
+    { dir: path.join('/home/user', '.claude', 'skills'), source: 'global' }
   ]);
 });
 
@@ -78,6 +78,21 @@ test('scanSkills dedups identical skill names across directories (first wins)', 
 
   assert.equal(skills.length, 1);
   assert.equal(skills[0].description, 'From first dir');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('scanSkills copies the directory label into each result as source', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'source-test-'));
+  const localDir = path.join(tmp, 'local');
+  const userDir = path.join(tmp, 'user');
+
+  await makeSkill(localDir, 'a', 'local-skill');
+  await makeSkill(userDir, 'b', 'user-skill');
+
+  const skills = await scanSkills([{ dir: localDir, source: 'local' }, { dir: userDir, source: 'global' }]);
+  assert.equal(skills.find(s => s.name === 'local-skill').source, 'local');
+  assert.equal(skills.find(s => s.name === 'user-skill').source, 'global');
 
   await fs.rm(tmp, { recursive: true, force: true });
 });

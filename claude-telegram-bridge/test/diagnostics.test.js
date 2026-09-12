@@ -38,6 +38,8 @@ test('gatherDiagnostics reports skill counts per source directory', async () => 
   assert.equal(diag.skillSources[0].dir, path.join(tmp, '.claude', 'skills'));
   assert.equal(diag.skillSources[0].skillCount, 1);
   assert.deepEqual(diag.skillSources[0].skillNames, ['local-skill']);
+  assert.equal(diag.skillSources[0].source, 'local');
+  assert.equal(diag.skillSources[1].source, 'global');
   assert.equal(diag.skillSources[1].dir, path.join(home, '.claude', 'skills'));
   assert.equal(diag.skillSources[1].skillCount, 2);
   assert.equal(diag.totalScannedSkills, 3);

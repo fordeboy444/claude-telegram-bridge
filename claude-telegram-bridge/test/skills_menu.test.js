@@ -1,7 +1,7 @@
 // claude-telegram-bridge/test/skills_menu.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSkillsKeyboard, buildSkillInspectView } from '../src/skills/menu.js';
+import { buildSkillsKeyboard, buildSkillInspectView, getSkillIcon } from '../src/skills/menu.js';
 
 test('buildSkillsKeyboard paginates 6 items per page with navigation buttons', () => {
   const dummySkills = Array.from({ length: 15 }, (_, i) => ({
@@ -60,4 +60,22 @@ test('buildSkillInspectView generates Inspect card with Run buttons', () => {
   assert.ok(buttons.some(b => b.text.includes('Run Skill Now') && b.callback_data === 'skill_run_now:skill:brainstorming'));
   assert.ok(buttons.some(b => b.text.includes('Run with Arguments') && b.callback_data === 'skill_run_args:skill:brainstorming'));
   assert.ok(buttons.some(b => b.text.includes('Back to Skills') && b.callback_data === 'skills_page:0'));
+});
+
+test('getSkillIcon maps each source to its icon', () => {
+  assert.equal(getSkillIcon({ id: 'builtin:clear' }), '⌨️');
+  assert.equal(getSkillIcon({ id: 'skill:a', source: 'local' }), '📁');
+  assert.equal(getSkillIcon({ id: 'skill:a', source: 'project' }), '📁');
+  assert.equal(getSkillIcon({ id: 'skill:a', source: 'global' }), '🌐');
+  assert.equal(getSkillIcon({ id: 'plugin:p:a', source: 'plugin' }), '🧩');
+  assert.equal(getSkillIcon({ id: 'skill:a' }), '⚡');
+});
+
+test('buildSkillInspectView shows a Source line for non-builtin skills', () => {
+  const global = buildSkillInspectView({ id: 'skill:deploy', name: 'deploy', description: 'Deploy app', command: '/deploy', source: 'global' });
+  assert.ok(global.text.includes('Source:'), `expected a Source line, got: ${global.text}`);
+  assert.ok(global.text.includes('🌐'));
+
+  const builtin = buildSkillInspectView({ id: 'builtin:clear', name: 'clear', description: 'Clear context', command: '/clear' });
+  assert.ok(!builtin.text.includes('Source:'));
 });
