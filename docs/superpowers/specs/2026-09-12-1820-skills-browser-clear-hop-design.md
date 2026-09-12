@@ -77,6 +77,7 @@ scanPluginSkills({ home, projectPath }) → results
 - Priority: a project-scoped entry beats a global entry of the same plugin. Dedup key: `installPath` + skill name.
 - File missing or corrupt → `console.warn` + return `[]`.
 - Known overlap: a plugin skill and a personal skill may share a bare name; both entries then appear with different ids. The command string is identical (`/<name>`); Claude resolves invocation. No cross-kind dedup.
+- ⚠️ Verified Telegram constraint: `callback_data` is limited to **1–64 bytes**; over-long data makes the whole keyboard request fail with `BUTTON_DATA_INVALID` (applies to `editMessageText` too). Measured worst case with real plugin names: `skill_run_args:plugin:<plugin>:<skill>` reaches **65 bytes**. Full ids must therefore never go into `callback_data` — see 3.5.
 
 ### 3.4 Wiring (`src/index.js` `refreshSkills`)
 
@@ -87,23 +88,31 @@ cachedSkills = [...builtins, ...scanned, ...pluginSkills];
 - Project path for the plugin filter: `path.join(config.projectsDir, activeSessionName.replace(/^claude-/, ''))`.
 - No active session → only global plugin installs are scanned.
 
-### 3.5 Inspect view + choice callback (`src/skills/menu.js`, `src/index.js`)
+### 3.5 Short-hash callbacks, inspect view + choice callback (`src/skills/menu.js`, `src/index.js`)
+
+**Callback addressing.** All `callback_data` payloads carry a short hash instead of the full skill id:
+
+- `skillHash(id)` = first 8 hex chars of `sha1(id)` (deterministic → stable across refreshes).
+- `index.js` keeps `skillByHash: Map<string, skill>`, rebuilt in `refreshSkills()` (deterministic, so stale keyboards keep resolving as long as the skill still exists).
+- Collision guard: when a hash is already taken by a different skill, extend that entry's hash to 12 hex chars. At realistic skill counts (~50) collisions are near-zero.
+- Payloads: `skill_inspect:<hash>`, `skill_run_now:<hash>`, `skill_run_args:<hash>`, `skill_choice:<hash>:<choice>` — all ≤ 32 bytes, well under the 64-byte limit.
 
 `buildSkillInspectView(skill)`:
 
-- If `skill.choices` exists → one button per choice (2 per row), `callback_data: 'skill_choice:<skill.id>:<choice>'`; no Run / Run-with-arguments buttons.
-- Else → current run buttons, unchanged.
+- If `skill.choices` exists → one button per choice (2 per row), `callback_data: 'skill_choice:<hash>:<choice>'`; no Run / Run-with-arguments buttons.
+- Else → current run buttons, same flow but with the hashed id.
 - Non-builtin entries gain a `Source:` line in the view body.
 
 New handler in `index.js`:
 
 ```js
-bot.action(/skill_choice:(builtin:\w+):(\w+)/, async (ctx) => { ... })
+bot.action(/skill_choice:([0-9a-f]{8,12}):(\w+)/, async (ctx) => { ... })
 ```
 
-- Looks up the builtin by id (choices only exist on builtins, so the regex is safe).
+- Resolves the builtin through `skillByHash` (choices only exist on builtins).
 - Requires an active session (same guard as `skill_run_now`).
 - Injects `` `${skill.command} ${choice}` `` into tmux, then confirms with an `answerCbQuery` + a short reply.
+- Existing `skill_inspect` / `skill_run_now` / `skill_run_args` handlers switch from id lookup to hash lookup.
 
 ### 3.6 Diagnostics (`src/diagnostics.js`)
 
@@ -185,7 +194,7 @@ flowchart TD
 |------|--------|
 | `test/skills_scanner.test.js` (update) | builtin list: `clear`, `compact`, `model`+choices, `effort`+choices; `cost`/`doctor`/`review`/`help` absent |
 | `test/plugin_skills.test.js` (new) | fake home + cache tree: global + project selection, project-beats-global priority, dedup, corrupt JSON → `[]` |
-| `test/skills_menu.test.js` (update) | icon per source; choice picker buttons + `callback_data`; `Source:` line; run buttons hidden for choices |
+| `test/skills_menu.test.js` (update) | icon per source; choice picker buttons + hashed `callback_data`; `Source:` line; run buttons hidden for choices; **every generated `callback_data` ≤ 64 bytes** (assert with the longest real-world plugin id) |
 | `test/session_reader.test.js` (update) | re-bind on ID change with short poll interval; offset adopts file size; read failure keeps binding |
 | `test/integration.test.js` (update) | launch command contains `--settings`; generated settings file exists and points at the hook script |
 
@@ -194,8 +203,8 @@ flowchart TD
 | File | Change |
 |------|--------|
 | `src/skills/scanner.js` | builtin list, labeled dirs, `scanPluginSkills()` |
-| `src/skills/menu.js` | icons, choice picker inspect view, `Source:` line |
-| `src/index.js` | merge plugin skills, pass project path, `skill_choice` handler, pass `getBoundSessionId` |
+| `src/skills/menu.js` | icons, `skillHash()`, hashed callbacks, choice picker inspect view, `Source:` line |
+| `src/index.js` | merge plugin skills, `skillByHash` map, `skill_choice` handler, pass project path + `getBoundSessionId` |
 | `src/projects/manager.js` | generate settings file, append `--settings` to launch |
 | `src/diagnostics.js` | source labels + plugin section |
 | `src/tmux/session_reader.js` | periodic re-bind poll |
