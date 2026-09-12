@@ -3,3 +3,4 @@ node_modules
 .superpowers/
 .claude/telegram-bridge.pid
 .worktrees/
+claude-telegram-bridge/hooks/claude-bridge-settings.generated.json

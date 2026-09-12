@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { ProjectManager } from '../src/projects/manager.js';
+import { ProjectManager, generateHookSettings } from '../src/projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from '../src/projects/menu.js';
 
 test('ProjectManager discovers folders and correlates active tmux sessions', async () => {
@@ -79,7 +80,7 @@ test('ProjectManager starts a fresh session by terminating previous if existing'
     setSessionOption: async (session, key, value) => { optionsSet.push({ session, key, value }); }
   };
 
-  const manager = new ProjectManager('/tmp/projects', mockController);
+  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: null });
   const session = await manager.startFreshSession('web-backend');
 
   assert.equal(session, 'claude-web-backend');
@@ -163,4 +164,48 @@ test('buildProjectActionView renders appropriate buttons based on running status
   const runningButtons = runningView.reply_markup.inline_keyboard.flat();
   assert.ok(runningButtons.some(b => b.text.includes('End Session')));
   assert.ok(!runningButtons.some(b => b.text.includes('Connect')), 'running project must not offer Connect');
+});
+
+test('startFreshSession appends --settings pointing at the hook settings file', async () => {
+  let created = [];
+  const mockController = {
+    hasSession: async () => false,
+    newSession: async (name, cwd, cmd) => { created.push({ name, cwd, cmd }); },
+    setSessionOption: async () => {}
+  };
+
+  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: '/tmp/hook-settings.json' });
+  await manager.startFreshSession('web-backend');
+
+  assert.match(
+    created[0].cmd,
+    /--permission-mode bypassPermissions --settings "\/tmp\/hook-settings\.json"$/
+  );
+});
+
+test('startFreshSession omits --settings when hook settings generation failed', async () => {
+  let created = [];
+  const mockController = {
+    hasSession: async () => false,
+    newSession: async (name, cwd, cmd) => { created.push({ name, cwd, cmd }); },
+    setSessionOption: async () => {}
+  };
+
+  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: null });
+  await manager.startFreshSession('web-backend');
+  assert.ok(!created[0].cmd.includes('--settings'), `unexpected --settings in: ${created[0].cmd}`);
+});
+
+test('generateHookSettings writes settings that point at the hook script', () => {
+  const tmp = fsSync.mkdtempSync(path.join(os.tmpdir(), 'hook-settings-'));
+  const settingsPath = generateHookSettings(tmp);
+  const settings = JSON.parse(fsSync.readFileSync(settingsPath, 'utf8'));
+
+  const hook = settings.hooks.SessionStart[0].hooks[0];
+  assert.equal(hook.type, 'command');
+  assert.equal(hook.timeout, 5);
+  assert.equal(hook.command, path.join(tmp, 'hooks', 'claude-session-id-sync.sh'));
+  assert.equal(path.dirname(settingsPath), path.join(tmp, 'hooks'));
+
+  fsSync.rmSync(tmp, { recursive: true, force: true });
 });

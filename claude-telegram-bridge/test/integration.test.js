@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fsSync from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createBot } from '../src/index.js';
 
 test('createBot initializes Telegraf instance with middleware, setMyCommands, and handlers', async () => {
@@ -1141,4 +1144,30 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
 
   botInstance.stop();
   t.mock.timers.reset();
+});
+
+test('bridge startup generates the hook settings file next to the hook script', async () => {
+  const mockBot = {
+    use: () => {},
+    on: () => {},
+    command: () => {},
+    action: () => {},
+    telegram: { setMyCommands: async () => {}, sendMessage: async () => {}, sendChatAction: async () => {} }
+  };
+  createBot({
+    botToken: '123456:TEST_TOKEN',
+    allowedUserIds: ['111'],
+    projectsDir: process.cwd(),
+    tmuxPath: 'tmux',
+    pollIntervalMs: 1000
+  }, { bot: mockBot });
+
+  const bridgeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const settingsPath = path.join(bridgeRoot, 'hooks', 'claude-bridge-settings.generated.json');
+  assert.ok(fsSync.existsSync(settingsPath), 'generated settings file must exist at startup');
+  const settings = JSON.parse(fsSync.readFileSync(settingsPath, 'utf8'));
+  assert.equal(
+    settings.hooks.SessionStart[0].hooks[0].command,
+    path.join(bridgeRoot, 'hooks', 'claude-session-id-sync.sh')
+  );
 });

@@ -22,7 +22,7 @@ function makeStub() {
 
 test('startFreshSession launches claude.exe when tmux runs via wsl', async () => {
   const tmux = makeStub();
-  const pm = new ProjectManager('C:/projects', tmux);
+  const pm = new ProjectManager('C:/projects', tmux, { hookSettingsPath: null });
   await pm.startFreshSession('web', 'C:/projects/web');
 
   const launched = tmux.calls.newSession[0];
@@ -33,11 +33,23 @@ test('startFreshSession launches claude.exe when tmux runs via wsl', async () =>
 
 test('startFreshSession keeps bare claude when tmux is native (no wsl)', async () => {
   const tmux = makeStub();
-  const pm = new ProjectManager('C:/projects', tmux);
+  const pm = new ProjectManager('C:/projects', tmux, { hookSettingsPath: null });
   pm.cliExecutable = 'claude';
   await pm.startFreshSession('web', 'C:/projects/web');
 
   const launched = tmux.calls.newSession[0];
   const match = launched.cmd.match(/^claude --session-id /);
   assert.ok(match, `expected bare claude launch command, got: ${launched.cmd}`);
+});
+
+test('startFreshSession appends the quoted --settings flag on wsl launches too', async () => {
+  const tmux = makeStub();
+  const pm = new ProjectManager('C:/projects', tmux, { hookSettingsPath: '/tmp/hook-settings.json' });
+  await pm.startFreshSession('web', 'C:/projects/web');
+
+  const launched = tmux.calls.newSession[0];
+  assert.match(
+    launched.cmd,
+    /^claude\.exe --session-id [0-9a-f-]+ --permission-mode bypassPermissions --settings "\/tmp\/hook-settings\.json"$/
+  );
 });

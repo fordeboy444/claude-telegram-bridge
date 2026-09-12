@@ -1,7 +1,38 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { readOrcaProjects } from './orca_reader.js';
+
+// Bridge repo root (src/projects/manager.js -> ../..). The SessionStart hook
+// script lives in <root>/hooks and is referenced by absolute path, because
+// `claude --settings` resolves hook commands from the file's location.
+const BRIDGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Generate the settings file that binds the SessionStart hook to every
+// bridge-launched session. Idempotent overwrite; returns the path or null.
+export function generateHookSettings(rootDir = BRIDGE_ROOT) {
+  const hooksDir = path.join(rootDir, 'hooks');
+  const hookScript = path.join(hooksDir, 'claude-session-id-sync.sh');
+  const settingsPath = path.join(hooksDir, 'claude-bridge-settings.generated.json');
+  try {
+    fsSync.mkdirSync(hooksDir, { recursive: true });
+    const settings = {
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: 'command', command: hookScript, timeout: 5 }] }
+        ]
+      }
+    };
+    fsSync.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    try { fsSync.chmodSync(hookScript, 0o755); } catch {}
+    return settingsPath;
+  } catch (err) {
+    console.warn('⚠️ Could not generate hook settings file:', err.message);
+    return null;
+  }
+}
 
 export class ProjectManager {
   // Windows interop: a bare `claude` is not on the WSL PATH (only claude.exe),
@@ -12,6 +43,10 @@ export class ProjectManager {
     this.orcaReader = deps.orcaReader || readOrcaProjects;
     this.cliExecutable = deps.cliExecutable
       ?? (String(tmuxController?.tmuxPath || '').includes('wsl') ? 'claude.exe' : 'claude');
+    // String = use as-is; null = launch without --settings; undefined = generate
+    this.hookSettingsPath = deps.hookSettingsPath !== undefined
+      ? deps.hookSettingsPath
+      : generateHookSettings();
   }
 
   normalizeSessionName(name) {
@@ -80,11 +115,11 @@ export class ProjectManager {
     // A fixed session id makes the transcript filename deterministic, so the
     // bridge can read exactly this session's transcript (no newest-file guessing).
     const sessionId = randomUUID();
-    await this.controller.newSession(
-      sessionName,
-      resolvedPath,
-      `${this.cliExecutable} --session-id ${sessionId} --permission-mode bypassPermissions`
-    );
+    const launchCmd = `${this.cliExecutable} --session-id ${sessionId} --permission-mode bypassPermissions`;
+    const command = this.hookSettingsPath
+      ? `${launchCmd} --settings "${this.hookSettingsPath.replace(/"/g, '\\"')}"`
+      : launchCmd;
+    await this.controller.newSession(sessionName, resolvedPath, command);
     await this.controller.setSessionOption(sessionName, '@claude_session_id', sessionId);
     return sessionName;
   }
