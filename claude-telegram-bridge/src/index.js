@@ -234,7 +234,13 @@ export function createBot(config, deps = {}) {
           }
         },
         config.pollIntervalMs,
-        { sessionId }
+        {
+          sessionId,
+          // After /clear, /resume or /branch the CLI starts a new session id;
+          // the SessionStart hook publishes it on the tmux session and the
+          // reader re-binds every 5th poll tick (closure over this session).
+          getBoundSessionId: () => tmux.getSessionOption(sessionName, '@claude_session_id')
+        }
       );
     }
   }

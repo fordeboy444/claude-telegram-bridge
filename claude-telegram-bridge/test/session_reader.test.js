@@ -287,3 +287,84 @@ test('ClaudeSessionReader.start with a sessionId polls the bound file and ignore
   assert.equal(receivedEvents[0].type, 'text');
   assert.equal(receivedEvents[0].content, 'Bound polling reply.');
 });
+
+test('ClaudeSessionReader re-binds to the new session id after /clear', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-hop-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-hop');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const oldId = '11111111-1111-1111-1111-111111111111';
+  const newId = '22222222-2222-2222-2222-222222222222';
+  const oldFile = path.join(projectsDir, `${oldId}.jsonl`);
+  const newFile = path.join(projectsDir, `${newId}.jsonl`);
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+
+  await fs.writeFile(oldFile, line('Before the hop.'));
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude'), sessionId: oldId });
+  const received = [];
+  let hopReady = false;
+  reader.start(projectPath, (ev) => received.push(ev), 20, {
+    getBoundSessionId: async () => (hopReady ? newId : oldId)
+  });
+
+  // The old binding streams first
+  await new Promise(r => setTimeout(r, 120));
+  await fs.appendFile(oldFile, line('Old session reply.'));
+  await new Promise(r => setTimeout(r, 120));
+  assert.ok(received.some(e => e.content === 'Old session reply.'), 'old binding streams');
+
+  // /clear: the new transcript already has content, then the hook publishes the new id
+  await fs.writeFile(newFile, line('Pre-hop leftover line.'));
+  hopReady = true;
+
+  // Re-bind runs on every 5th tick (100ms here). The pre-hop lines must be
+  // adopted at the current file size, not replayed.
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(reader.sessionId, newId, 'reader re-bound to the new session id');
+  assert.ok(!received.some(e => e.content === 'Pre-hop leftover line.'), 'no replay of pre-hop lines');
+
+  // Streaming continues on the new file
+  await fs.appendFile(newFile, line('Post-hop reply.'));
+  await new Promise(r => setTimeout(r, 200));
+  reader.stop();
+  assert.ok(received.some(e => e.content === 'Post-hop reply.'), 'streaming resumed on the new transcript');
+});
+
+test('ClaudeSessionReader keeps the current binding when getBoundSessionId fails', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-hopfail-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-hopfail');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const oldId = '33333333-3333-3333-3333-333333333333';
+  const oldFile = path.join(projectsDir, `${oldId}.jsonl`);
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+  await fs.writeFile(oldFile, line('Initial line.'));
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude'), sessionId: oldId });
+  const received = [];
+  reader.start(projectPath, (ev) => received.push(ev), 20, {
+    getBoundSessionId: async () => { throw new Error('tmux went away'); }
+  });
+
+  // Several bind-check ticks fail; the binding must survive them
+  await new Promise(r => setTimeout(r, 300));
+  await fs.appendFile(oldFile, line('Still the old session.'));
+  await new Promise(r => setTimeout(r, 120));
+  reader.stop();
+
+  assert.equal(reader.sessionId, oldId, 'binding unchanged after read failures');
+  assert.ok(received.some(e => e.content === 'Still the old session.'));
+});

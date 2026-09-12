@@ -174,6 +174,8 @@ export class ClaudeSessionReader {
     this._stopped = false;
 
     let trackedFile = null;
+    let tickCount = 0;
+    const getBoundSessionId = options.getBoundSessionId || null;
 
     // Initialize offset to current size so we only read future events if file already exists
     this.resolveSessionFile(projectPath).then(async file => {
@@ -188,6 +190,31 @@ export class ClaudeSessionReader {
 
       this.pollingTimer = setInterval(async () => {
         try {
+          // Every 5th poll tick: check whether /clear, /resume or /branch
+          // moved us to a new Claude session id inside the same tmux pane.
+          // The SessionStart hook publishes the id onto the tmux session.
+          if (getBoundSessionId && ++tickCount % 5 === 0) {
+            let boundId = null;
+            try {
+              boundId = await getBoundSessionId();
+            } catch {
+              boundId = null; // option not set / tmux down: keep current binding
+            }
+            if (boundId && boundId !== this.sessionId) {
+              this.sessionId = boundId;
+              const newFile = await this.resolveSessionFile(projectPath);
+              if (newFile) {
+                trackedFile = newFile;
+                try {
+                  const stat = await fs.stat(newFile);
+                  this.lastFileOffsets.set(newFile, stat.size); // adopt from now, no replay
+                } catch {
+                  this.lastFileOffsets.set(newFile, 0); // file appears later, read from start
+                }
+              }
+            }
+          }
+
           // With a bound sessionId the resolved path is constant (no flipping);
           // the fallback still follows the newest file for legacy sessions.
           const currentLatest = await this.resolveSessionFile(projectPath);
