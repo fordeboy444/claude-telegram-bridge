@@ -9,7 +9,7 @@ import { ClaudeSessionReader } from './tmux/session_reader.js';
 import { formatQuestionCard, normalizeQuestions, buildAnswerKeys } from './tmux/question_handler.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories } from './skills/scanner.js';
-import { buildSkillsKeyboard, buildSkillInspectView } from './skills/menu.js';
+import { buildSkillsKeyboard, buildSkillInspectView, assignSkillHashes } from './skills/menu.js';
 import { ProjectManager } from './projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
 import { gatherDiagnostics, formatDiagnosticsMessage } from './diagnostics.js';
@@ -34,6 +34,7 @@ export function createBot(config, deps = {}) {
   let activeSessionReader = null;
   let pendingArgsSkill = null;
   let cachedSkills = [];
+  let skillByHash = new Map();
   let commandMapping = new Map();
   let typingTimer = null;
   let typingChatId = null;
@@ -153,6 +154,7 @@ export function createBot(config, deps = {}) {
     const scanned = await scanSkills(dirs);
     const builtins = getBuiltInCommands();
     cachedSkills = [...builtins, ...scanned];
+    skillByHash = assignSkillHashes(cachedSkills);
     await updateBotCommands();
     return cachedSkills;
   }
@@ -299,18 +301,16 @@ export function createBot(config, deps = {}) {
     await ctx.answerCbQuery();
   });
 
-  bot.action(/skill_inspect:(.+)/, async (ctx) => {
-    const skillId = ctx.match[1];
-    const skill = cachedSkills.find(s => s.id === skillId);
+  bot.action(/skill_inspect:([0-9a-f]{8,12})/, async (ctx) => {
+    const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
     const view = buildSkillInspectView(skill);
     await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
     await ctx.answerCbQuery();
   });
 
-  bot.action(/skill_run_now:(.+)/, async (ctx) => {
-    const skillId = ctx.match[1];
-    const skill = cachedSkills.find(s => s.id === skillId);
+  bot.action(/skill_run_now:([0-9a-f]{8,12})/, async (ctx) => {
+    const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
     if (!activeSessionName) {
@@ -323,9 +323,8 @@ export function createBot(config, deps = {}) {
     await ctx.reply(`⚡ Injected \`${skill.command}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
   });
 
-  bot.action(/skill_run_args:(.+)/, async (ctx) => {
-    const skillId = ctx.match[1];
-    const skill = cachedSkills.find(s => s.id === skillId);
+  bot.action(/skill_run_args:([0-9a-f]{8,12})/, async (ctx) => {
+    const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
     pendingArgsSkill = skill;
@@ -334,6 +333,21 @@ export function createBot(config, deps = {}) {
       `✏️ Please reply with the arguments you want to pass to \`${skill.command}\` (or type /cancel):`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  bot.action(/skill_choice:([0-9a-f]{8,12}):(\w+)/, async (ctx) => {
+    const skill = skillByHash.get(ctx.match[1]);
+    if (!skill) return ctx.answerCbQuery('Skill not found');
+
+    if (!activeSessionName) {
+      return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
+    }
+
+    const fullCmd = `${skill.command} ${ctx.match[2]}`;
+    startTyping(ctx.chat?.id);
+    await tmux.sendKeys(activeSessionName, fullCmd, true);
+    await ctx.answerCbQuery(`Running ${fullCmd}...`);
+    await ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
   });
 
   bot.action('projects_list', async (ctx) => {

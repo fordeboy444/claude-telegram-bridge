@@ -984,7 +984,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
 
   // skill_run_now path
   await handlers.skillRunNow({
-    match: [`skill_run_now:${skill.id}`, skill.id],
+    match: [`skill_run_now:${skill.hash}`, skill.hash],
     chat: { id: 12345 },
     answerCbQuery: async () => {},
     reply: async () => {}
@@ -994,7 +994,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
 
   // skill args completion path (skill_run_args arms it, the next text completes it)
   await handlers.skillRunArgs({
-    match: [`skill_run_args:${skill.id}`, skill.id],
+    match: [`skill_run_args:${skill.hash}`, skill.hash],
     chat: { id: 12345 },
     answerCbQuery: async () => {},
     reply: async () => {}
