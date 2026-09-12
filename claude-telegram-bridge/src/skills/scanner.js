@@ -7,10 +7,8 @@ export function getBuiltInCommands() {
   return [
     { id: 'builtin:clear', name: 'clear', description: 'Clear conversation context and restart clean', command: '/clear' },
     { id: 'builtin:compact', name: 'compact', description: 'Summarize and compress current chat history', command: '/compact' },
-    { id: 'builtin:cost', name: 'cost', description: 'Show total token usage and estimated cost', command: '/cost' },
-    { id: 'builtin:doctor', name: 'doctor', description: 'Check health and configuration of Claude Code', command: '/doctor' },
-    { id: 'builtin:review', name: 'review', description: 'Review changes or PR against quality rules', command: '/review' },
-    { id: 'builtin:help', name: 'help', description: 'Show help and available commands', command: '/help' }
+    { id: 'builtin:model', name: 'model', description: 'Switch model (fable, opus, sonnet, haiku)', command: '/model', choices: ['fable', 'opus', 'sonnet', 'haiku'] },
+    { id: 'builtin:effort', name: 'effort', description: 'Adjust thinking effort', command: '/effort', choices: ['low', 'medium', 'high', 'xhigh', 'max'] }
   ];
 }
 

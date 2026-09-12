@@ -6,14 +6,19 @@ import path from 'node:path';
 import os from 'node:os';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand } from '../src/skills/scanner.js';
 
-test('getBuiltInCommands returns core Claude commands', () => {
+test('getBuiltInCommands keeps clear+compact and adds model/effort pickers', () => {
   const builtins = getBuiltInCommands();
-  assert.ok(builtins.some(c => c.command === '/clear'));
-  assert.ok(builtins.some(c => c.command === '/compact'));
-  assert.ok(builtins.some(c => c.command === '/help'));
-  assert.ok(builtins.some(c => c.command === '/cost'));
-  assert.ok(builtins.some(c => c.command === '/doctor'));
-  assert.ok(builtins.some(c => c.command === '/review'));
+  assert.deepEqual(builtins.map(c => c.name), ['clear', 'compact', 'model', 'effort']);
+
+  const model = builtins.find(c => c.name === 'model');
+  assert.equal(model.command, '/model');
+  assert.equal(model.description, 'Switch model (fable, opus, sonnet, haiku)');
+  assert.deepEqual(model.choices, ['fable', 'opus', 'sonnet', 'haiku']);
+
+  const effort = builtins.find(c => c.name === 'effort');
+  assert.equal(effort.command, '/effort');
+  assert.equal(effort.description, 'Adjust thinking effort');
+  assert.deepEqual(effort.choices, ['low', 'medium', 'high', 'xhigh', 'max']);
 });
 
 test('sanitizeTelegramCommand produces valid Telegram command identifiers', () => {
