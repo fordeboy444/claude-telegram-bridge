@@ -8,7 +8,7 @@ import { TmuxController } from './tmux/controller.js';
 import { ClaudeSessionReader } from './tmux/session_reader.js';
 import { formatQuestionCard, normalizeQuestions, buildAnswerKeys } from './tmux/question_handler.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
-import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories } from './skills/scanner.js';
+import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories, scanPluginSkills } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView, assignSkillHashes } from './skills/menu.js';
 import { ProjectManager } from './projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
@@ -153,7 +153,16 @@ export function createBot(config, deps = {}) {
     });
     const scanned = await scanSkills(dirs);
     const builtins = getBuiltInCommands();
-    cachedSkills = [...builtins, ...scanned];
+    let pluginSkills = [];
+    try {
+      const projectPath = activeSessionName
+        ? path.join(config.projectsDir, activeSessionName.replace(/^claude-/, ''))
+        : null;
+      pluginSkills = await scanPluginSkills({ home: os.homedir(), projectPath });
+    } catch (err) {
+      console.warn('⚠️ Plugin skill scan failed:', err.message);
+    }
+    cachedSkills = [...builtins, ...scanned, ...pluginSkills];
     skillByHash = assignSkillHashes(cachedSkills);
     await updateBotCommands();
     return cachedSkills;

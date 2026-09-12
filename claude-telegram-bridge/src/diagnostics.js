@@ -4,7 +4,7 @@
 // tmux sessions, and per-directory skill discovery results.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { scanSkills, getBuiltInCommands, resolveSkillsDirectories } from './skills/scanner.js';
+import { scanSkills, getBuiltInCommands, resolveSkillsDirectories, scanPluginSkills } from './skills/scanner.js';
 
 export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionName, tmux }) {
   const dirs = resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName });
@@ -36,6 +36,26 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
     });
   }
 
+  let pluginSkills = [];
+  try {
+    const pluginProjectPath = activeSessionName && projectsDir
+      ? path.join(projectsDir, activeSessionName.replace(/^claude-/, ''))
+      : null;
+    pluginSkills = await scanPluginSkills({ home, projectPath: pluginProjectPath });
+  } catch {
+    pluginSkills = [];
+  }
+  const pluginSources = [];
+  const pluginSeen = new Set();
+  for (const skill of pluginSkills) {
+    if (pluginSeen.has(skill.installPath)) continue;
+    pluginSeen.add(skill.installPath);
+    pluginSources.push({
+      installPath: skill.installPath,
+      skillCount: pluginSkills.filter(s => s.installPath === skill.installPath).length
+    });
+  }
+
   let tmuxSessions = [];
   try {
     tmuxSessions = await tmux.listSessions('claude-');
@@ -58,7 +78,9 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
     tmuxSessions,
     skillSources,
     totalScannedSkills,
-    builtinsCount: getBuiltInCommands().length
+    builtinsCount: getBuiltInCommands().length,
+    pluginSources,
+    pluginSkillsCount: pluginSkills.length
   };
 }
 
@@ -93,8 +115,15 @@ export function formatDiagnosticsMessage(diag) {
       lines.push(`   • ${name}`);
     }
   }
+  if (diag.pluginSources?.length) {
+    lines.push('', '🧩 *Plugin skills:*');
+    for (const plugin of diag.pluginSources) {
+      lines.push(`✅ \`${formatDirLabel(plugin.installPath)}\` — ${plugin.skillCount} skill(s)`);
+    }
+  }
   lines.push('');
-  lines.push(`⚡ ${diag.totalScannedSkills} scanned + ${diag.builtinsCount} built-in skill(s)`);
+  const pluginNote = diag.pluginSkillsCount ? ` + ${diag.pluginSkillsCount} plugin` : '';
+  lines.push(`⚡ ${diag.totalScannedSkills} scanned + ${diag.builtinsCount} built-in${pluginNote} skill(s)`);
 
   return lines.join('\n');
 }

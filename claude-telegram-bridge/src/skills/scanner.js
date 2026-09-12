@@ -82,3 +82,79 @@ export async function scanSkills(directories = []) {
 
   return results;
 }
+
+// Discover skills shipped inside Claude Code plugins. installed_plugins.json
+// (v2) maps "<name>@<marketplace>" to install entries; entries without
+// projectPath are global installs, entries with projectPath are project-scoped.
+export async function scanPluginSkills({ home, projectPath } = {}) {
+  const results = [];
+  if (!home) return results;
+  const pluginsFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+
+  let raw;
+  try {
+    raw = await fs.readFile(pluginsFile, 'utf8');
+  } catch {
+    return results; // no plugins file -> no plugin skills
+  }
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.warn('⚠️ installed_plugins.json unreadable, skipping plugin skills:', err.message);
+    return results;
+  }
+
+  const normProject = projectPath ? path.resolve(projectPath).toLowerCase() : null;
+  const seen = new Set(); // dedup key: installPath + skill name
+
+  for (const [key, entries] of Object.entries(data?.plugins || {})) {
+    if (!Array.isArray(entries)) continue;
+    const pluginName = key.split('@')[0];
+
+    const eligible = entries.filter(entry => entry && entry.installPath && (
+      !entry.projectPath ||
+      (normProject && path.resolve(entry.projectPath).toLowerCase() === normProject)
+    ));
+    if (eligible.length === 0) continue;
+
+    // A project-scoped install of the same plugin beats the global one
+    const chosen = eligible.some(entry => entry.projectPath)
+      ? eligible.filter(entry => entry.projectPath)
+      : eligible;
+
+    for (const install of chosen) {
+      const skillsRoot = path.join(install.installPath, 'skills');
+      let dirs;
+      try {
+        dirs = await fs.readdir(skillsRoot, { withFileTypes: true });
+      } catch {
+        continue; // installPath missing -> skip silently
+      }
+      for (const dirEntry of dirs) {
+        if (!dirEntry.isDirectory() && !dirEntry.isSymbolicLink()) continue;
+        let parsed;
+        try {
+          parsed = matter(await fs.readFile(path.join(skillsRoot, dirEntry.name, 'SKILL.md'), 'utf8'));
+        } catch {
+          continue; // no/invalid SKILL.md -> skip
+        }
+        const name = parsed.data.name || dirEntry.name;
+        const dedupKey = `${install.installPath}:${name}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
+        results.push({
+          id: `plugin:${pluginName}:${name}`,
+          name: `${pluginName}:${name}`,
+          description: (parsed.data.description || 'No description provided').replace(/[*_`#]/g, '').trim(),
+          command: `/${name}`,
+          source: 'plugin',
+          installPath: install.installPath
+        });
+      }
+    }
+  }
+
+  return results;
+}

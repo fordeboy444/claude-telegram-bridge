@@ -17,6 +17,15 @@ async function makeSkill(root, folderName, name) {
   );
 }
 
+async function makePluginSkill(installPath, folder, name, description) {
+  const skillFolder = path.join(installPath, 'skills', folder);
+  await fs.mkdir(skillFolder, { recursive: true });
+  await fs.writeFile(
+    path.join(skillFolder, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${description}\n---\nBody`
+  );
+}
+
 test('gatherDiagnostics reports skill counts per source directory', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-test-'));
   const home = path.join(tmp, 'home');
@@ -106,6 +115,33 @@ test('gatherDiagnostics survives a tmux failure without throwing', async () => {
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
+test('gatherDiagnostics lists plugin skill sources', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-plugin-'));
+  const home = path.join(tmp, 'home');
+  const installPath = path.join(tmp, 'plugins', 'superpowers');
+  await makePluginSkill(installPath, 'alpha', 'plug-skill', 'From plugin');
+  await fs.mkdir(path.join(home, '.claude', 'plugins'), { recursive: true });
+  await fs.writeFile(
+    path.join(home, '.claude', 'plugins', 'installed_plugins.json'),
+    JSON.stringify({ plugins: { 'superpowers@obra': [{ installPath }] } })
+  );
+
+  const diag = await gatherDiagnostics({
+    cwd: tmp,
+    home,
+    projectsDir: null,
+    activeSessionName: null,
+    tmux: { listSessions: async () => [], hasSession: async () => false }
+  });
+
+  assert.equal(diag.pluginSkillsCount, 1);
+  assert.equal(diag.pluginSources.length, 1);
+  assert.equal(diag.pluginSources[0].installPath, installPath);
+  assert.equal(diag.pluginSources[0].skillCount, 1);
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
 test('formatDiagnosticsMessage renders readable Telegram markdown', async () => {
   const message = formatDiagnosticsMessage({
     activeSession: 'claude-my-app',
@@ -116,12 +152,16 @@ test('formatDiagnosticsMessage renders readable Telegram markdown', async () => 
       { dir: '/home/.claude/skills', exists: false, skillCount: 0, skillNames: [] }
     ],
     totalScannedSkills: 2,
-    builtinsCount: 6
+    builtinsCount: 6,
+    pluginSources: [{ installPath: '/home/.claude/plugins/cache/superpowers', skillCount: 2 }],
+    pluginSkillsCount: 2
   });
 
   assert.match(message, /claude-my-app/);
   assert.match(message, /🟢/); // alive session
   assert.match(message, /2 skill/);
   assert.match(message, /❌/); // missing dir marker
+  assert.match(message, /🧩/); // plugin section rendered
+  assert.match(message, /2 plugin/);
   assert.ok(!message.includes('undefined'));
 });
