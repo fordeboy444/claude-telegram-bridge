@@ -185,7 +185,8 @@ test('gatherSessionStatus tolerates a missing transcript and the formatter still
 
   const message = formatStatusMessage({ sessionName: 'claude-x', alive: true, status, now: 1_700_000_000_000 });
   assert.match(message, /Session Status/);
-  assert.match(message, /claude-x/);
+  assert.match(message, /`x`/);
+  assert.doesNotMatch(message, /claude-x/);
   assert.match(message, /Online/);
 });
 
@@ -222,7 +223,8 @@ test('formatStatusMessage lists running agents with uptime, model, and tokens', 
 
   const message = formatStatusMessage({ sessionName: 'claude-myproject', alive: true, status, now });
 
-  assert.match(message, /claude-myproject/);
+  assert.match(message, /`myproject`/);
+  assert.doesNotMatch(message, /claude-myproject/);
   assert.match(message, /Online/);
   assert.match(message, /2h 14m/);
   assert.match(message, /glm-5\.3:cloud/);
@@ -268,6 +270,25 @@ test('formatStatusMessage handles a missing transcript and dead sessions', () =>
   });
   assert.match(message, /Terminated/);
   assert.match(message, /Sub-agents:\* none/);
+});
+
+test('formatStatusMessage shows the folder name without the claude- prefix', () => {
+  const message = formatStatusMessage({
+    sessionName: 'claude-Main-Agent',
+    alive: true,
+    status: { transcriptFound: true, sessionStart: null, model: null, lastActivityMs: null, running: [], finishedCount: 0, totalCount: 0 }
+  });
+  assert.match(message, /`Main-Agent`/);
+  assert.doesNotMatch(message, /claude-Main-Agent/);
+});
+
+test('formatStatusMessage keeps names without the claude- prefix unchanged', () => {
+  const message = formatStatusMessage({
+    sessionName: 'plain',
+    alive: true,
+    status: { transcriptFound: true, sessionStart: null, model: null, lastActivityMs: null, running: [], finishedCount: 0, totalCount: 0 }
+  });
+  assert.match(message, /`plain`/);
 });
 
 test('formatting helpers use compact numbers, durations, and sanitized labels', () => {

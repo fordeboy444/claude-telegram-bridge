@@ -870,7 +870,7 @@ test('enriched /status prints uptime, model, and running sub-agents from the tra
   await statusHandler({ reply: async (text) => { replies.push(text); } });
   const reply = replies.join('\n');
 
-  assert.match(reply, /claude-status-proj/, 'session name present');
+  assert.match(reply, /`status-proj`/, 'session name shows the folder part only');
   assert.match(reply, /25m/, 'uptime from the first transcript record');
   assert.match(reply, /glm-5\.3:cloud/, 'current model present');
   assert.match(reply, /1 running · 0 finished/, 'running agent line present');
