@@ -13,6 +13,7 @@ import { buildSkillsKeyboard, buildSkillInspectView, assignSkillHashes } from '.
 import { ProjectManager, sessionNameFor, projectNameFromSession } from './projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
 import { gatherDiagnostics, formatDiagnosticsMessage } from './diagnostics.js';
+import { gatherSessionStatus, formatStatusMessage } from './status_report.js';
 import { sendWithFallback } from './utils/messenger.js';
 
 // If the daemon is launched from inside a Claude Code session (e.g. restarted
@@ -31,6 +32,7 @@ export function createBot(config, deps = {}) {
   // State tracking
   let activeSessionName = null;
   let activeChatId = null;
+  let activeProjectPath = null;
   let activeSessionReader = null;
   let pendingArgsSkill = null;
   let cachedSkills = [];
@@ -194,6 +196,7 @@ export function createBot(config, deps = {}) {
 
     activeSessionName = sessionName;
     activeChatId = chatId;
+    activeProjectPath = null;
 
     if (sessionName && chatId) {
       refreshSkills().catch(err => console.warn('⚠️ Skill refresh failed:', err.message));
@@ -214,7 +217,11 @@ export function createBot(config, deps = {}) {
       // the newer reader.
       if (myEpoch !== readerEpoch) return;
 
-      activeSessionReader = new SessionReaderClass();
+      // Real Orca project paths differ from projectsDir; /status reuses this
+      // value instead of recomputing it.
+      activeProjectPath = resolvedProjectPath;
+
+      activeSessionReader = new SessionReaderClass({ claudeHome: config.claudeHome });
       activeSessionReader.start(
         resolvedProjectPath,
         async (event) => {
@@ -291,11 +298,44 @@ export function createBot(config, deps = {}) {
     if (!activeSessionName) {
       return ctx.reply('⚪ *No active session.* Use /projects to start one.', { parse_mode: 'Markdown' });
     }
-    const exists = await tmux.hasSession(activeSessionName);
-    return ctx.reply(
-      `🎯 *Active Session:* \`${activeSessionName}\` (${exists ? '🟢 Online' : '🔴 Terminated'})`,
-      { parse_mode: 'Markdown' }
-    );
+    let exists = true;
+    try {
+      exists = await tmux.hasSession(activeSessionName);
+    } catch {
+      exists = true; // cannot check: let the gather step surface real errors
+    }
+
+    const legacyLine = (note = '') => {
+      const text = `🎯 *Active Session:* \`${activeSessionName}\` (${exists ? '🟢 Online' : '🔴 Terminated'})`;
+      return ctx.reply(note ? `${text}\n⚠️ ${note}` : text, { parse_mode: 'Markdown' });
+    };
+
+    // Read the session id fresh so dashboard data follows /clear hops.
+    let sessionId = null;
+    try {
+      sessionId = await tmux.getSessionOption(activeSessionName, '@claude_session_id');
+    } catch {
+      sessionId = null;
+    }
+    if (!sessionId && activeSessionReader) {
+      sessionId = activeSessionReader.sessionId || null;
+    }
+
+    try {
+      const status = await gatherSessionStatus({
+        claudeHome: config.claudeHome,
+        projectPath: activeProjectPath || path.join(config.projectsDir, projectNameFromSession(activeSessionName)),
+        sessionId,
+        now: Date.now()
+      });
+      return ctx.reply(
+        formatStatusMessage({ sessionName: activeSessionName, alive: exists, status }),
+        { parse_mode: 'Markdown' }
+      );
+    } catch (err) {
+      console.warn('⚠️ status gather failed:', err.message);
+      return legacyLine('dashboard data unavailable');
+    }
   });
 
   bot.command('projects', async (ctx) => {
