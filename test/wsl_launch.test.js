@@ -8,7 +8,7 @@ function makeStub() {
   return {
     calls,
     tmuxPath: 'wsl -d Ubuntu tmux',
-    hasSession: async (name) => calls.killed.includes(name) ? false : false,
+    hasSession: async (name) => false,
     killSession: async (name) => { calls.killed.push(name); },
     listSessions: async () => [],
     newSession: async (name, cwd, cmd) => {
