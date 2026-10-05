@@ -878,3 +878,110 @@ test('enriched /status prints uptime, model, and running sub-agents from the tra
 
   botInstance.stop();
 });
+
+test('/interrupt sends exactly one Escape and stops typing', async () => {
+  const escapeCalls = [];
+  const mockBot = makeBotMock();
+
+  const mockTmux = makeTmuxMock({
+    sendKeys: async () => {},
+    sendKeysWithDelay: async (session, keys, delayMs) => {
+      escapeCalls.push({ session, keys, delayMs });
+    }
+  });
+
+  class MockReader {
+    start() {}
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  // Inject text first so the typing indicator is active before the interrupt
+  await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'hello' }, reply: async () => {} });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'typing active before interrupt');
+
+  const interruptHandler = mockBot.handlers.commands.interrupt;
+  assert.ok(interruptHandler, 'interrupt command handler registered');
+
+  const replies = [];
+  await interruptHandler({ reply: async (text) => { replies.push(text); } });
+
+  assert.equal(escapeCalls.length, 1, 'exactly one key send');
+  assert.equal(escapeCalls[0].session, 'claude-test');
+  assert.deepEqual(escapeCalls[0].keys, ['Escape']);
+  assert.equal(escapeCalls[0].delayMs, 0);
+  assert.match(replies.join('\n'), /Interrupt/, 'confirmation reply sent');
+  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stopped');
+
+  botInstance.stop();
+});
+
+test('/interrupt warns when no session is connected and sends nothing', async () => {
+  const escapeCalls = [];
+  const mockBot = makeBotMock();
+
+  const mockTmux = makeTmuxMock({
+    sendKeysWithDelay: async (session, keys, delayMs) => {
+      escapeCalls.push({ session, keys, delayMs });
+    }
+  });
+
+  const botInstance = createBot(defaultTestConfig(), { bot: mockBot, tmux: mockTmux });
+
+  const interruptHandler = mockBot.handlers.commands.interrupt;
+  assert.ok(interruptHandler, 'interrupt command handler registered');
+
+  const replies = [];
+  await interruptHandler({ reply: async (text) => { replies.push(text); } });
+
+  assert.ok(replies.some(r => r.includes('No active Claude session')), 'warning reply sent');
+  assert.equal(escapeCalls.length, 0, 'no keys sent');
+  assert.equal(botInstance.getActiveState().activeSessionName, null);
+
+  botInstance.stop();
+});
+
+test('/interrupt clears the question card so later taps expire', async () => {
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock();
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  readerOnEvent({
+    type: 'question',
+    content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
+  });
+
+  const interruptHandler = mockBot.handlers.commands.interrupt;
+  await interruptHandler({ reply: async () => {} });
+
+  const qaHandler = actionHandler(mockBot, 'qa:');
+  let cbAnswer = null;
+  await qaHandler({
+    match: ['qa:0:1', '0', '1'],
+    chat: { id: 12345 },
+    answerCbQuery: async (msg) => { cbAnswer = msg; },
+    reply: async () => {}
+  });
+
+  assert.equal(cbAnswer, 'Question expired or not found', 'cleared question card rejects taps');
+
+  botInstance.stop();
+});
