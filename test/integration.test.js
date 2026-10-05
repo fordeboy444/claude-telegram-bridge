@@ -1011,3 +1011,54 @@ test('/interrupt clears the question card so later taps expire', async () => {
 
   botInstance.stop();
 });
+
+test('typed /effort with no args opens the effort picker instead of injecting', async () => {
+  const sentKeys = [];
+  const replies = [];
+  const mockBot = makeBotMock();
+
+  const mockTmux = makeTmuxMock({
+    sendKeys: async (session, keys, enter) => {
+      sentKeys.push({ session, keys, enter });
+    }
+  });
+
+  const botInstance = createBot(defaultTestConfig(), { bot: mockBot, tmux: mockTmux });
+  const { switchActiveSession, refreshSkills } = botInstance;
+
+  await refreshSkills();
+  await switchActiveSession('claude-test', 12345);
+
+  const textHandler = mockBot.handlers.on.text;
+  assert.ok(textHandler, 'text handler registered');
+
+  // Bare /effort: no injection, picker reply instead.
+  await textHandler({
+    chat: { id: 12345 },
+    message: { text: '/effort' },
+    reply: async (text, opts) => { replies.push({ text, opts }); }
+  });
+
+  assert.equal(sentKeys.length, 0, 'bare /effort must not inject into tmux');
+  assert.equal(replies.length, 1);
+  assert.ok(replies[0].opts?.reply_markup?.inline_keyboard, 'picker reply carries an inline keyboard');
+  const buttons = replies[0].opts.reply_markup.inline_keyboard.flat();
+  const choiceButtons = buttons.filter(b => b.callback_data?.startsWith('skill_choice:'));
+  assert.equal(choiceButtons.length, 5);
+  // Faster-to-smarter button order, one button per level.
+  assert.deepEqual(choiceButtons.map(b => b.text), ['low', 'medium', 'high', 'xhigh', 'max']);
+
+  // /effort high keeps injecting directly — args bypass the picker.
+  await textHandler({
+    chat: { id: 12345 },
+    message: { text: '/effort high' },
+    reply: async (text, opts) => { replies.push({ text, opts }); }
+  });
+
+  assert.equal(sentKeys.length, 1);
+  assert.equal(sentKeys[0].session, 'claude-test');
+  assert.equal(sentKeys[0].keys, '/effort high');
+  assert.equal(sentKeys[0].enter, true);
+
+  botInstance.stop();
+});
