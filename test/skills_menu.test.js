@@ -151,7 +151,7 @@ test('getSkillIcon maps each source to its icon', () => {
   assert.equal(getSkillIcon({ id: 'builtin:clear' }), '⌨️');
   assert.equal(getSkillIcon({ id: 'skill:a', source: 'local' }), '📁');
   assert.equal(getSkillIcon({ id: 'skill:a', source: 'project' }), '📁');
-  assert.equal(getSkillIcon({ id: 'skill:a', source: 'global' }), '🌐');
+  assert.equal(getSkillIcon({ id: 'skill:a', source: 'global' }), '📁');
   assert.equal(getSkillIcon({ id: 'plugin:p:a', source: 'plugin' }), '🧩');
   assert.equal(getSkillIcon({ id: 'plugin:p:a', source: 'plugin-local' }), '🧩');
   assert.equal(getSkillIcon({ id: 'skill:a' }), '⚡');
@@ -168,7 +168,7 @@ test('buildSkillInspectView labels a plugin-local skill as a local plugin', () =
 test('buildSkillInspectView shows a Source line for non-builtin skills', () => {
   const global = buildSkillInspectView({ id: 'skill:deploy', name: 'deploy', description: 'Deploy app', command: '/deploy', source: 'global' });
   assert.ok(global.text.includes('Source:'), `expected a Source line, got: ${global.text}`);
-  assert.ok(global.text.includes('🌐'));
+  assert.ok(global.text.includes('📁 global'));
 
   const builtin = buildSkillInspectView({ id: 'builtin:clear', name: 'clear', description: 'Clear context', command: '/clear' });
   assert.ok(!builtin.text.includes('Source:'));

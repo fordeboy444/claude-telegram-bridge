@@ -1,12 +1,12 @@
 // claude-telegram-bridge/src/skills/menu.js
 import { createHash } from 'node:crypto';
 
-// Icons by kind: built-in commands ⌨️, local/project 📁, global 🌐, plugin 🧩
-const SOURCE_ICONS = { local: '📁', project: '📁', global: '🌐', plugin: '🧩', 'plugin-local': '🧩' };
+// Icons by kind: built-in commands ⌨️, all skills 📁, plugins 🧩
+const SOURCE_ICONS = { local: '📁', project: '📁', global: '📁', plugin: '🧩', 'plugin-local': '🧩' };
 const SOURCE_LABELS = {
   local: '📁 local',
   project: '📁 project',
-  global: '🌐 global',
+  global: '📁 global',
   plugin: '🧩 plugin',
   'plugin-local': '🧩 local plugin'
 };

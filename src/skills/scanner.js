@@ -27,7 +27,7 @@ export function sanitizeTelegramCommand(name) {
   return clean.slice(0, 32);
 }
 
-// Each directory carries the label shown to the user (📁 local / 🌐 global / project).
+// Each directory carries the label shown to the user (📁 local / 📁 global / project).
 // An explicit projectPath (the real worktree path from orca-data.json) wins;
 // the name-derived path stays as fallback for older callers that cannot pass one.
 export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName, projectPath }) {
