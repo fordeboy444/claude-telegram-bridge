@@ -464,16 +464,54 @@ export function createBot(config, deps = {}) {
     const proj = projects.find(p => p.name === projectName);
     if (!proj) return ctx.answerCbQuery('Project not found');
 
+    // Selecting a project with a live session enters it instead of steering
+    // the user to a fresh start. Prefer the exact main session:
+    // runningSessions mixes claude-<proj> with claude-<proj>-2 variants.
+    const preferred = proj.runningSessions?.includes(sessionNameFor(proj.name))
+      ? sessionNameFor(proj.name)
+      : proj.runningSessions?.[0];
+    if (preferred && await tmux.hasSession(preferred)) {
+      // Teardown of the previous reader/question state happens inside
+      // switchActiveSession; the fresh-start path stays available only when
+      // no live session exists (or after End Session).
+      await switchActiveSession(preferred, ctx.chat.id, proj.path);
+      await ctx.answerCbQuery(`🔌 Entered ${preferred}`);
+    } else {
+      await ctx.answerCbQuery();
+    }
+
+    // Keep rendering the card so End Session stays reachable after entering.
     const view = buildProjectActionView(proj);
     await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
-    await ctx.answerCbQuery();
   });
 
   bot.action(/proj_start:(.+)/, (ctx) => runActionHandler(ctx, async (ctx) => {
     const projectName = ctx.match[1];
-    await ctx.answerCbQuery('Starting fresh session...');
     const projects = await projectManager.listProjects();
     const proj = projects.find(p => p.name === projectName || p.displayName === projectName);
+
+    // The card can be stale at press time: re-check tmux just before the
+    // fresh start so startFreshSession never kills a live session the user
+    // did not stop. The exact main session is checked first, then variants.
+    let live = null;
+    const candidates = [
+      sessionNameFor(projectName),
+      ...((proj?.runningSessions) || [])
+    ];
+    for (const s of candidates) {
+      if (await tmux.hasSession(s)) { live = s; break; }
+    }
+    if (live) {
+      await switchActiveSession(live, ctx.chat.id, proj ? proj.path : null);
+      await ctx.answerCbQuery(`▶️ Resumed ${live}`);
+      await ctx.reply(
+        `▶️ Resumed the \`${live}\` session (it was still running). End it first to start fresh.`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    await ctx.answerCbQuery('Starting fresh session...');
     const sessionName = await projectManager.startFreshSession(projectName, proj ? proj.path : null);
     await switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
 
