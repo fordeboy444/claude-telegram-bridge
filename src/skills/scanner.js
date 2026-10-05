@@ -46,6 +46,53 @@ export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSession
   return dirs;
 }
 
+// Claude Code also loads plugin folders that hold .claude-plugin/plugin.json
+// under ~/.claude/skills AND the project's .claude/skills (origin @skills-dir).
+// scanSkills reads only <dir>/<name>/SKILL.md, so these inner skills need this
+// probe. Default layout only: <pluginRoot>/skills/<name>/SKILL.md.
+// pluginSource: 'plugin-local' under project/local dirs, 'plugin' under global.
+export async function scanSkillsDirPlugin(pluginRoot, pluginSource, seenIds) {
+  const results = [];
+  let manifest;
+  try {
+    manifest = JSON.parse(
+      await fs.readFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')
+    );
+  } catch {
+    return results; // broken or missing manifest -> skip silently
+  }
+  const pluginName = manifest.name || path.basename(pluginRoot);
+
+  let dirs;
+  try {
+    dirs = await fs.readdir(path.join(pluginRoot, 'skills'), { withFileTypes: true });
+  } catch {
+    return results; // no skills/ layout -> nothing to list
+  }
+
+  for (const dirEntry of dirs) {
+    if (!dirEntry.isDirectory() && !dirEntry.isSymbolicLink()) continue;
+    let parsed;
+    try {
+      parsed = matter(await fs.readFile(path.join(pluginRoot, 'skills', dirEntry.name, 'SKILL.md'), 'utf8'));
+    } catch {
+      continue; // no/invalid SKILL.md -> skip
+    }
+    const name = parsed.data.name || dirEntry.name;
+    const id = `skillsdir:${pluginName}:${name}`;
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    results.push({
+      id,
+      name: `${pluginName}:${name}`,
+      description: (parsed.data.description || 'No description provided').replace(/[*_`#]/g, '').trim(),
+      command: `/${name}`,
+      source: pluginSource
+    });
+  }
+  return results;
+}
+
 export async function scanSkills(directories = []) {
   const results = [];
   const seenIds = new Set();
@@ -77,7 +124,10 @@ export async function scanSkills(directories = []) {
             });
           }
         } catch {
-          // File does not exist, invalid YAML, or broken symlink, skip
+          // Not a plain skill folder. Probe a skills-directory plugin instead:
+          // a child dir with .claude-plugin/plugin.json, local under project dirs.
+          const pluginSource = source === 'global' ? 'plugin' : 'plugin-local';
+          results.push(...await scanSkillsDirPlugin(path.join(dir, entry.name), pluginSource, seenIds));
         }
       }
     } catch (err) {
@@ -154,7 +204,7 @@ export async function scanPluginSkills({ home, projectPath } = {}) {
           name: `${pluginName}:${name}`,
           description: (parsed.data.description || 'No description provided').replace(/[*_`#]/g, '').trim(),
           command: `/${name}`,
-          source: 'plugin',
+          source: install.projectPath ? 'plugin-local' : 'plugin',
           installPath: install.installPath
         });
       }

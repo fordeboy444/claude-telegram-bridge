@@ -61,7 +61,8 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
     pluginSeen.add(skill.installPath);
     pluginSources.push({
       installPath: skill.installPath,
-      skillCount: pluginSkills.filter(s => s.installPath === skill.installPath).length
+      skillCount: pluginSkills.filter(s => s.installPath === skill.installPath).length,
+      source: skill.source
     });
   }
 
@@ -127,7 +128,8 @@ export function formatDiagnosticsMessage(diag) {
   if (diag.pluginSources?.length) {
     lines.push('', '🧩 *Plugin skills:*');
     for (const plugin of diag.pluginSources) {
-      lines.push(`✅ \`${formatDirLabel(plugin.installPath)}\` — ${plugin.skillCount} skill(s)`);
+      const scope = plugin.source === 'plugin-local' ? '— local' : '— global';
+      lines.push(`✅ \`${formatDirLabel(plugin.installPath)}\`${scope} — ${plugin.skillCount} skill(s)`);
     }
   }
   lines.push('');

@@ -153,7 +153,16 @@ test('getSkillIcon maps each source to its icon', () => {
   assert.equal(getSkillIcon({ id: 'skill:a', source: 'project' }), '📁');
   assert.equal(getSkillIcon({ id: 'skill:a', source: 'global' }), '🌐');
   assert.equal(getSkillIcon({ id: 'plugin:p:a', source: 'plugin' }), '🧩');
+  assert.equal(getSkillIcon({ id: 'plugin:p:a', source: 'plugin-local' }), '🧩');
   assert.equal(getSkillIcon({ id: 'skill:a' }), '⚡');
+});
+
+test('buildSkillInspectView labels a plugin-local skill as a local plugin', () => {
+  const card = buildSkillInspectView({
+    id: 'plugin:bridge:deploy', name: 'bridge:deploy', description: 'Deploy app', command: '/deploy', source: 'plugin-local'
+  });
+  assert.ok(card.text.includes('🧩'), `expected the 🧩 icon, got: ${card.text}`);
+  assert.ok(card.text.includes('🧩 local plugin'), `expected the local plugin label, got: ${card.text}`);
 });
 
 test('buildSkillInspectView shows a Source line for non-builtin skills', () => {

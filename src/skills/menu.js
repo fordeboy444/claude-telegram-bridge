@@ -2,8 +2,14 @@
 import { createHash } from 'node:crypto';
 
 // Icons by kind: built-in commands ⌨️, local/project 📁, global 🌐, plugin 🧩
-const SOURCE_ICONS = { local: '📁', project: '📁', global: '🌐', plugin: '🧩' };
-const SOURCE_LABELS = { local: '📁 local', project: '📁 project', global: '🌐 global', plugin: '🧩 plugin' };
+const SOURCE_ICONS = { local: '📁', project: '📁', global: '🌐', plugin: '🧩', 'plugin-local': '🧩' };
+const SOURCE_LABELS = {
+  local: '📁 local',
+  project: '📁 project',
+  global: '🌐 global',
+  plugin: '🧩 plugin',
+  'plugin-local': '🧩 local plugin'
+};
 
 export function getSkillIcon(item) {
   if (item?.id?.startsWith('builtin:')) return '⌨️';

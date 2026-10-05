@@ -25,6 +25,20 @@ export async function makePluginSkill(installPath, folder, name, description) {
   );
 }
 
+// Write a skills-directory plugin as scanSkillsDirPlugin expects it:
+//   <skillsRoot>/<pluginFolder>/.claude-plugin/plugin.json
+//   <skillsRoot>/<pluginFolder>/skills/<skillFolder>/SKILL.md
+export async function makeSkillsDirPlugin(skillsRoot, pluginFolder, pluginName, skillFolder, skillName, description = 'A plugin skill') {
+  const pluginRoot = path.join(skillsRoot, pluginFolder);
+  await fs.mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+  await fs.writeFile(
+    path.join(pluginRoot, '.claude-plugin', 'plugin.json'),
+    JSON.stringify({ name: pluginName })
+  );
+  await makeSkill(path.join(pluginRoot, 'skills'), skillFolder, skillName, description);
+  return pluginRoot;
+}
+
 // Write ~/.claude/plugins/installed_plugins.json (v2 shape).
 export async function writePluginsFile(home, plugins) {
   const pluginsDir = path.join(home, '.claude', 'plugins');

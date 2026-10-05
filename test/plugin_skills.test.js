@@ -43,6 +43,7 @@ test('scanPluginSkills selects project-scoped installs for the active project', 
   const skills = await scanPluginSkills({ home, projectPath });
   assert.equal(skills.length, 1);
   assert.equal(skills[0].name, 'bridge:deploy');
+  assert.equal(skills[0].source, 'plugin-local');
 
   await fs.rm(tmp, { recursive: true, force: true });
 });
@@ -80,6 +81,7 @@ test('a project-scoped install of the same plugin beats the global one', async (
   assert.equal(skills.length, 1);
   assert.equal(skills[0].name, 'dup:project-deploy');
   assert.equal(skills[0].installPath, projectInstall);
+  assert.equal(skills[0].source, 'plugin-local');
 
   await fs.rm(tmp, { recursive: true, force: true });
 });
