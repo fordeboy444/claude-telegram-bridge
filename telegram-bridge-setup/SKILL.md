@@ -5,7 +5,7 @@ description: Configure the claude-telegram-bridge daemon, verify environment set
 
 # Telegram Bridge Setup
 
-This skill configures the `claude-telegram-bridge` daemon and verifies dependencies.
+This skill configures the `claude-telegram-bridge` daemon and verifies dependencies. The daemon lives at the repository root (`src/index.js`, `package.json`).
 
 ## Quick Automated Setup
 
@@ -16,37 +16,32 @@ bash "$CLAUDE_SKILL_DIR/scripts/setup.sh"
 *(Or `./scripts/setup.sh` inside the skill directory).*
 
 This script will:
-1. Locate `claude-telegram-bridge/`.
+1. Locate the bridge repo root.
 2. Generate `.env` from `.env.example` if missing.
 3. Automatically configure `TMUX_PATH` (`wsl tmux` on Windows, `tmux` on Linux/macOS).
 4. Install npm dependencies.
 5. Check if your bot token and user ID are configured.
 
-## Step 1: Create a Telegram Bot
+## Creating a Bot Token and User ID
 
-1. Open Telegram and message **@BotFather**.
-2. Send: `/newbot`.
-3. Choose a name and username.
-4. Copy your HTTP API bot token.
+For the canonical walkthrough, see the **Prerequisites** section of `README.md`.
 
-## Step 2: Obtain your Telegram User ID
+1. **Bot token:** message **@BotFather**, send `/newbot`, and copy your HTTP API token.
+2. **Your Telegram user ID:** message **@userinfobot** and copy your numeric ID.
 
-1. In Telegram, start the bot **@userinfobot**.
-2. Copy your numeric user ID (for example: `123456789`).
+## Step 1: Configure the Bridge Environment
 
-## Step 3: Configure the Bridge Environment
-
-Edit `claude-telegram-bridge/.env`:
+Edit `.env` in the repo root:
 - `TELEGRAM_BOT_TOKEN`: Your bot token from @BotFather.
 - `ALLOWED_USER_IDS`: Your numeric ID (comma-separated if multiple).
 - `PROJECTS_DIR`: Path to your projects root directory.
 - `TMUX_PATH`: Path to tmux (set automatically by setup script).
 - `POLL_INTERVAL_MS`: Polling interval in milliseconds (default: `1000`).
 
-## Step 4: Verify and Start
+## Step 2: Verify and Start
 
-1. Verify tests:
+1. Verify tests from the repo root:
    ```bash
-   cd claude-telegram-bridge && npm test
+   npm test
    ```
-2. The bridge daemon starts automatically via session hooks when you launch Claude Code.
+2. Start the daemon from the repo root with `npm start`, or deploy it as a Docker service (see `COOLIFY_DEPLOY.md`).

@@ -7,10 +7,11 @@ echo "=========================================="
 echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BRIDGE_DIR="$(cd "$SCRIPT_DIR/../../../../claude-telegram-bridge" 2>/dev/null && pwd || true)"
+# The daemon lives at the repo root: <repo>/telegram-bridge-setup/scripts -> ../../
+BRIDGE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-if [ ! -d "$BRIDGE_DIR" ]; then
-  echo "❌ Error: Bridge directory not found at $BRIDGE_DIR"
+if [ ! -f "$BRIDGE_DIR/package.json" ]; then
+  echo "❌ Error: Bridge repo not found at $BRIDGE_DIR"
   exit 1
 fi
 
@@ -77,5 +78,5 @@ fi
 echo ""
 echo "=========================================="
 echo "✅ Setup finished."
-echo "The bridge daemon starts automatically via session hooks when you start Claude Code."
+echo "Start the daemon from the repo root with: npm start"
 echo "=========================================="
