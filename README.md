@@ -115,6 +115,7 @@ Open your Telegram bot and send `/start`!
 | `/projects` | Opens the Project Dashboard showing all workspaces and active tmux session status badges. |
 | `/skills` | Opens the paginated Skills Browser to inspect details, execute skills, or run with arguments. |
 | `/status` | Displays currently focused project session and online/offline status. |
+| `/interrupt` | Sends one Escape key to the active session. Claude Code stops the current task. |
 | `/help` | Detailed help and button action explanations. |
 | `<any text>` | Sends text directly into Claude Code in the active tmux pane as if typed on your keyboard! |
 | `/cancel` | Aborts a pending "Run with Arguments" prompt. |
