@@ -73,13 +73,6 @@ export class TmuxController {
     }
   }
 
-  async sendKeySequence(sessionName, keys = []) {
-    if (!keys || keys.length === 0) return;
-    for (const k of keys) {
-      await this.execAsync(['send-keys', '-t', sessionName, k]);
-    }
-  }
-
   // The Claude Code question modal redraws between keystrokes and drops keys
   // that arrive in one fast burst, so space keys out one exec at a time.
   // Keys are tmux key names (Enter, Right, Space, Down, single digits).
