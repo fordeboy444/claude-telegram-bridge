@@ -1,5 +1,11 @@
 node_modules
 .env
+.env.example
 .git
+.gitattributes
 test
 *.md
+.planning/
+.claude/
+telegram-bridge-setup/
+hooks/claude-bridge-settings.generated.json
