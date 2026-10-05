@@ -212,13 +212,16 @@ test('formatQuestionCard renders every question of a multi-question payload', ()
 
 test('sendKeysWithDelay sends each key as its own command', async () => {
   const cmds = [];
-  const fakeExec = (cmd, cb) => {
-    cmds.push(cmd);
+  const fakeExec = (file, args, cb) => {
+    cmds.push(args);
     cb(null, '', '');
   };
   const tmux = new TmuxController('tmux', fakeExec);
   await tmux.sendKeysWithDelay('sess', ['2', 'Enter'], 1);
-  assert.deepEqual(cmds, ['tmux send-keys -t "sess" 2', 'tmux send-keys -t "sess" Enter']);
+  assert.deepEqual(cmds, [
+    ['send-keys', '-t', 'sess', '2'],
+    ['send-keys', '-t', 'sess', 'Enter']
+  ]);
   await tmux.sendKeysWithDelay('sess', [], 1);
   assert.equal(cmds.length, 2);
 });

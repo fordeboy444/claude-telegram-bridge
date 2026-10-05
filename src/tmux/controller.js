@@ -1,14 +1,22 @@
-import { exec as defaultExec } from 'node:child_process';
+import { execFile as defaultExecFile } from 'node:child_process';
 
 export class TmuxController {
-  constructor(tmuxPath = 'tmux', execFn = defaultExec) {
+  // TMUX_PATH may carry interop args (e.g. "wsl -d Ubuntu tmux"). Split the
+  // configured value once here: first token is the binary, the rest are
+  // prefix arguments. No user-supplied data is ever part of this value.
+  constructor(tmuxPath = 'tmux', execFn = defaultExecFile) {
     this.tmuxPath = tmuxPath;
+    const parts = tmuxPath.trim().split(/\s+/);
+    this.execFile = parts[0];
+    this.execPrefixArgs = parts.slice(1);
     this.execFn = execFn;
   }
 
-  execAsync(cmd) {
+  // Runs the tmux binary with an argv array -- never through a shell -- so
+  // no user text can ever be parsed by /bin/sh.
+  execAsync(args) {
     return new Promise((resolve, reject) => {
-      this.execFn(cmd, (err, stdout, stderr) => {
+      this.execFn(this.execFile, [...this.execPrefixArgs, ...args], (err, stdout, stderr) => {
         if (err) return reject(err);
         resolve({ stdout: stdout || '', stderr: stderr || '' });
       });
@@ -17,7 +25,7 @@ export class TmuxController {
 
   async hasSession(sessionName) {
     try {
-      await this.execAsync(`${this.tmuxPath} has-session -t "${sessionName}"`);
+      await this.execAsync(['has-session', '-t', sessionName]);
       return true;
     } catch {
       return false;
@@ -26,7 +34,7 @@ export class TmuxController {
 
   async listSessions(prefix = '') {
     try {
-      const { stdout } = await this.execAsync(`${this.tmuxPath} list-sessions -F "#{session_name}"`);
+      const { stdout } = await this.execAsync(['list-sessions', '-F', '#{session_name}']);
       const all = stdout.split('\n').map(s => s.trim()).filter(Boolean);
       return prefix ? all.filter(s => s.startsWith(prefix)) : all;
     } catch {
@@ -45,16 +53,12 @@ export class TmuxController {
 
   async newSession(sessionName, cwd, command = 'claude') {
     const targetCwd = this.normalizePath(cwd);
-    const safeSession = sessionName.replace(/"/g, '\\"');
-    const safeCwd = targetCwd.replace(/"/g, '\\"');
-    const safeCmd = command.replace(/"/g, '\\"');
-    const cmd = `${this.tmuxPath} new-session -d -s "${safeSession}" -c "${safeCwd}" "${safeCmd}"`;
-    await this.execAsync(cmd);
+    await this.execAsync(['new-session', '-d', '-s', sessionName, '-c', targetCwd, command]);
   }
 
   async killSession(sessionName) {
     try {
-      await this.execAsync(`${this.tmuxPath} kill-session -t "${sessionName}"`);
+      await this.execAsync(['kill-session', '-t', sessionName]);
     } catch (err) {
       if (!err.message?.includes('no server running') && !err.message?.includes('session not found')) {
         throw err;
@@ -63,19 +67,17 @@ export class TmuxController {
   }
 
   async sendKeys(sessionName, text, pressEnter = true) {
-    const escaped = text.replace(/"/g, '\\"');
-    let cmd = `${this.tmuxPath} send-keys -t "${sessionName}" -l "${escaped}"`;
+    await this.execAsync(['send-keys', '-t', sessionName, '-l', text]);
     if (pressEnter) {
-      cmd += ` && ${this.tmuxPath} send-keys -t "${sessionName}" Enter`;
+      await this.execAsync(['send-keys', '-t', sessionName, 'Enter']);
     }
-    await this.execAsync(cmd);
   }
 
   async sendKeySequence(sessionName, keys = []) {
     if (!keys || keys.length === 0) return;
-    const safeSession = sessionName.replace(/"/g, '\\"');
-    const cmds = keys.map(k => `${this.tmuxPath} send-keys -t "${safeSession}" ${k}`);
-    await this.execAsync(cmds.join(' && '));
+    for (const k of keys) {
+      await this.execAsync(['send-keys', '-t', sessionName, k]);
+    }
   }
 
   // The Claude Code question modal redraws between keystrokes and drops keys
@@ -83,9 +85,8 @@ export class TmuxController {
   // Keys are tmux key names (Enter, Right, Space, Down, single digits).
   async sendKeysWithDelay(sessionName, keys = [], delayMs = 300) {
     if (!keys || keys.length === 0) return;
-    const safeSession = sessionName.replace(/"/g, '\\"');
     for (const k of keys) {
-      await this.execAsync(`${this.tmuxPath} send-keys -t "${safeSession}" ${k}`);
+      await this.execAsync(['send-keys', '-t', sessionName, k]);
       await new Promise(r => setTimeout(r, delayMs));
     }
   }
@@ -93,7 +94,7 @@ export class TmuxController {
   async capturePane(sessionName, startLine = -100) {
     try {
       const { stdout } = await this.execAsync(
-        `${this.tmuxPath} capture-pane -p -t "${sessionName}" -S ${startLine}`
+        ['capture-pane', '-p', '-t', sessionName, '-S', String(startLine)]
       );
       return stdout;
     } catch (err) {
@@ -105,15 +106,12 @@ export class TmuxController {
   }
 
   async setSessionOption(sessionName, key, value) {
-    const safeSession = sessionName.replace(/"/g, '\\"');
-    const safeValue = String(value).replace(/"/g, '\\"');
-    await this.execAsync(`${this.tmuxPath} set-option -t "${safeSession}" ${key} "${safeValue}"`);
+    await this.execAsync(['set-option', '-t', sessionName, key, String(value)]);
   }
 
   async getSessionOption(sessionName, key) {
     try {
-      const safeSession = sessionName.replace(/"/g, '\\"');
-      const { stdout } = await this.execAsync(`${this.tmuxPath} show-options -v -t "${safeSession}" ${key}`);
+      const { stdout } = await this.execAsync(['show-options', '-v', '-t', sessionName, key]);
       const value = stdout.trim();
       return value || null;
     } catch {
