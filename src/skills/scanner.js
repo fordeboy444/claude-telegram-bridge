@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
+import { projectNameFromSession } from '../projects/manager.js';
 
 export function getBuiltInCommands() {
   return [
@@ -34,7 +35,7 @@ export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSession
   ];
   if (activeSessionName && projectsDir) {
     dirs.push({
-      dir: path.join(projectsDir, activeSessionName.replace(/^claude-/, ''), '.claude', 'skills'),
+      dir: path.join(projectsDir, projectNameFromSession(activeSessionName), '.claude', 'skills'),
       source: 'project'
     });
   }

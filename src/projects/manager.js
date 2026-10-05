@@ -34,6 +34,22 @@ export function generateHookSettings(rootDir = BRIDGE_ROOT) {
   }
 }
 
+// Session naming lives here, in one place: tmux sessions are named
+// `claude-<normalized project>` and prefixed variants append `-<suffix>`
+// (claude-web-2). ProjectManager.normalizeSessionName delegates to normalizeName.
+export function normalizeName(name) {
+  if (!name) return 'default';
+  return name.replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+export function sessionNameFor(projectName) {
+  return `claude-${normalizeName(projectName)}`;
+}
+
+export function projectNameFromSession(sessionName) {
+  return sessionName ? sessionName.replace(/^claude-/, '') : '';
+}
+
 export class ProjectManager {
   // Windows interop: a bare `claude` is not on the WSL PATH (only claude.exe),
   // so panes die instantly with "command not found" and the session with them.
@@ -50,8 +66,7 @@ export class ProjectManager {
   }
 
   normalizeSessionName(name) {
-    if (!name) return 'default';
-    return name.replace(/[^a-zA-Z0-9_-]/g, '-');
+    return normalizeName(name);
   }
 
   async listProjects() {
@@ -87,8 +102,7 @@ export class ProjectManager {
       const activeSessions = await this.controller.listSessions('claude-');
 
       return projects.map(p => {
-        const normName = this.normalizeSessionName(p.name);
-        const sessionPrefix = `claude-${normName}`;
+        const sessionPrefix = sessionNameFor(p.name);
         const running = activeSessions.filter(s => s === sessionPrefix || s.startsWith(`${sessionPrefix}-`));
         return {
           name: p.name,
@@ -104,8 +118,7 @@ export class ProjectManager {
   }
 
   async startFreshSession(projectName, projectPath) {
-    const normName = this.normalizeSessionName(projectName);
-    const sessionName = `claude-${normName}`;
+    const sessionName = sessionNameFor(projectName);
     const resolvedPath = projectPath || path.join(this.projectsDir, projectName);
 
     if (await this.controller.hasSession(sessionName)) {
@@ -125,16 +138,14 @@ export class ProjectManager {
   }
 
   async killCurrentSession(projectName) {
-    const normName = this.normalizeSessionName(projectName);
-    const sessionName = `claude-${normName}`;
+    const sessionName = sessionNameFor(projectName);
     if (await this.controller.hasSession(sessionName)) {
       await this.controller.killSession(sessionName);
     }
   }
 
   async killProjectSessions(projectName) {
-    const normName = this.normalizeSessionName(projectName);
-    const sessionPrefix = `claude-${normName}`;
+    const sessionPrefix = sessionNameFor(projectName);
     const all = await this.controller.listSessions('claude-');
     const toKill = all.filter(s => s === sessionPrefix || s.startsWith(`${sessionPrefix}-`));
     for (const sess of toKill) {

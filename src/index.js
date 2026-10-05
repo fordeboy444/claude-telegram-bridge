@@ -10,7 +10,7 @@ import { formatQuestionCard, normalizeQuestions, buildAnswerKeys } from './tmux/
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories, scanPluginSkills } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView, assignSkillHashes } from './skills/menu.js';
-import { ProjectManager } from './projects/manager.js';
+import { ProjectManager, sessionNameFor, projectNameFromSession } from './projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
 import { gatherDiagnostics, formatDiagnosticsMessage } from './diagnostics.js';
 import { sendWithFallback } from './utils/messenger.js';
@@ -160,7 +160,7 @@ export function createBot(config, deps = {}) {
     let pluginSkills = [];
     try {
       const projectPath = activeSessionName
-        ? path.join(config.projectsDir, activeSessionName.replace(/^claude-/, ''))
+        ? path.join(config.projectsDir, projectNameFromSession(activeSessionName))
         : null;
       pluginSkills = await scanPluginSkills({ home: os.homedir(), projectPath });
     } catch (err) {
@@ -197,7 +197,7 @@ export function createBot(config, deps = {}) {
 
     if (sessionName && chatId) {
       refreshSkills().catch(err => console.warn('⚠️ Skill refresh failed:', err.message));
-      const resolvedProjectName = sessionName.replace(/^claude-/, '');
+      const resolvedProjectName = projectNameFromSession(sessionName);
       const resolvedProjectPath = projectPath || path.join(config.projectsDir, resolvedProjectName);
 
       // Bind the reader to this tmux session's own transcript. Sessions
@@ -460,7 +460,7 @@ export function createBot(config, deps = {}) {
     // listProjects/killProjectSessions treat a project's sessions as
     // claude-<norm> and any claude-<norm>-<suffix> variant; the active
     // connection must be cleared for both shapes.
-    const targetPrefix = `claude-${projectManager.normalizeSessionName(projectName)}`;
+    const targetPrefix = sessionNameFor(projectName);
     if (
       activeSessionName === targetPrefix ||
       activeSessionName.startsWith(`${targetPrefix}-`)

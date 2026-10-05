@@ -5,6 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scanSkills, getBuiltInCommands, resolveSkillsDirectories, scanPluginSkills } from './skills/scanner.js';
+import { projectNameFromSession } from './projects/manager.js';
 
 export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionName, tmux }) {
   const dirs = resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName });
@@ -39,7 +40,7 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
   let pluginSkills = [];
   try {
     const pluginProjectPath = activeSessionName && projectsDir
-      ? path.join(projectsDir, activeSessionName.replace(/^claude-/, ''))
+      ? path.join(projectsDir, projectNameFromSession(activeSessionName))
       : null;
     pluginSkills = await scanPluginSkills({ home, projectPath: pluginProjectPath });
   } catch {
