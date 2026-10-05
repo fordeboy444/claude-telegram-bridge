@@ -181,6 +181,11 @@ export function createBot(config, deps = {}) {
       activeSessionReader = null;
     }
     lastInjectedPrompt = null; // stale prompts must not suppress echoes in the new session
+    // Question cards and "run with arguments" prompts belong to the outgoing
+    // session: keeping them across switches would inject the old session's
+    // keys/args into the new one.
+    activeQuestion = null;
+    pendingArgsSkill = null;
 
     activeSessionName = sessionName;
     activeChatId = chatId;
