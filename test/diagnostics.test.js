@@ -1,5 +1,5 @@
 // claude-telegram-bridge/test/diagnostics.test.js
-// /diag command internals: gathering live bridge state and formatting it
+// /project-resources command internals: gathering live bridge state and formatting it
 // into a readable Telegram message.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -117,7 +117,9 @@ test('gatherDiagnostics lists plugin skill sources', async () => {
     tmux: { listSessions: async () => [], hasSession: async () => false }
   });
 
-  assert.equal(diag.pluginSkillsCount, 1);
+  assert.equal(diag.plugins.length, 1);
+  assert.equal(diag.plugins[0].name, 'superpowers:plug-skill');
+  assert.equal(diag.plugins[0].source, 'plugin');
   assert.equal(diag.pluginSources.length, 1);
   assert.equal(diag.pluginSources[0].installPath, installPath);
   assert.equal(diag.pluginSources[0].skillCount, 1);
@@ -153,34 +155,103 @@ test('gatherDiagnostics scans the explicit activeProjectPath and matches plugin 
   assert.equal(project.skillCount, 1);
   assert.deepEqual(project.skillNames, ['worktree-skill']);
 
-  assert.equal(diag.pluginSkillsCount, 1, 'project-scoped install matched against the worktree path');
+  assert.equal(diag.plugins.length, 1, 'project-scoped install matched against the worktree path');
+  assert.equal(diag.plugins[0].source, 'plugin-local');
 
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
-test('formatDiagnosticsMessage renders readable Telegram markdown', async () => {
-  const message = formatDiagnosticsMessage({
-    activeSession: 'claude-my-app',
-    activeSessionAlive: true,
-    tmuxSessions: ['claude-my-app'],
-    skillSources: [
-      { dir: '/bridge/.claude/skills', exists: true, skillCount: 2, skillNames: ['one', 'two'] },
-      { dir: '/home/.claude/skills', exists: false, skillCount: 0, skillNames: [] }
-    ],
-    totalScannedSkills: 2,
-    builtinsCount: 6,
-    pluginSources: [{ installPath: '/home/.claude/plugins/cache/superpowers', skillCount: 2 }],
-    pluginSkillsCount: 2
-  });
+test('formatDiagnosticsMessage renders four name-only lists from gathered state', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-format-'));
+  const home = path.join(tmp, 'home');
+  const worktree = path.join(tmp, 'worktrees', 'feat');
+  await makeSkill(path.join(tmp, '.claude', 'skills'), 'alpha', 'local-skill');
+  await makeSkill(path.join(home, '.claude', 'skills'), 'beta', 'user-skill');
+  await makeSkill(path.join(worktree, '.claude', 'skills'), 'gamma', 'worktree-skill');
+  const localInstall = path.join(tmp, 'plugins', 'bridge');
+  const globalInstall = path.join(tmp, 'plugins', 'superpowers');
+  await makePluginSkill(localInstall, 'deploy', 'deploy-skill', 'Local plugin skill');
+  await makePluginSkill(globalInstall, 'review', 'review-skill', 'Global plugin skill');
+  await fs.mkdir(path.join(home, '.claude', 'plugins'), { recursive: true });
+  await fs.writeFile(
+    path.join(home, '.claude', 'plugins', 'installed_plugins.json'),
+    JSON.stringify({
+      plugins: {
+        'bridge@market': [{ installPath: localInstall, projectPath: worktree.toUpperCase() }],
+        'superpowers@obra': [{ installPath: globalInstall }]
+      }
+    })
+  );
 
+  const diag = await gatherDiagnostics({
+    cwd: tmp,
+    home,
+    projectsDir: path.join(tmp, 'projects'),
+    activeSessionName: 'claude-my-app',
+    activeProjectPath: worktree,
+    tmux: { listSessions: async () => ['claude-my-app'], hasSession: async () => true }
+  });
+  const message = formatDiagnosticsMessage(diag);
+
+  assert.match(message, /🗂️ \*Project Resources\*/);
   assert.match(message, /`my-app`/); // project name shown, prefix stripped
   assert.ok(!/claude-my-app/.test(message)); // raw session name gone
   assert.match(message, /🟢/); // alive session
-  assert.match(message, /2 skill/);
-  assert.match(message, /❌/); // missing dir marker
-  assert.match(message, /🧩/); // plugin section rendered
-  assert.match(message, /2 plugin/);
+  assert.match(message, /📁 \*Local skills:\*\n• local-skill\n• worktree-skill/);
+  assert.match(message, /📁 \*Global skills:\*\n• user-skill/);
+  assert.match(message, /🧩 \*Local plugins:\*\n• bridge:deploy-skill/);
+  assert.match(message, /🧩 \*Global plugins:\*\n• superpowers:review-skill/);
+  assert.ok(!message.includes('.claude')); // no paths in the card
+  assert.ok(!/scanned/.test(message)); // no totals row
   assert.ok(!message.includes('undefined'));
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('formatDiagnosticsMessage omits sections with no entries', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-omit-'));
+  const home = path.join(tmp, 'home');
+  await makeSkill(path.join(home, '.claude', 'skills'), 'beta', 'user-skill');
+
+  const diag = await gatherDiagnostics({
+    cwd: tmp,
+    home,
+    projectsDir: path.join(tmp, 'projects'),
+    activeSessionName: null,
+    tmux: { listSessions: async () => [], hasSession: async () => false }
+  });
+  const message = formatDiagnosticsMessage(diag);
+
+  assert.match(message, /📁 \*Global skills:\*/);
+  assert.ok(!message.includes('*Local skills:*'));
+  assert.ok(!message.includes('*Local plugins:*'));
+  assert.ok(!message.includes('*Global plugins:*'));
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('formatDiagnosticsMessage dedups a skill present in cwd and worktree dirs', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-dup-'));
+  const worktree = path.join(tmp, 'worktrees', 'feat');
+  await makeSkill(path.join(tmp, '.claude', 'skills'), 'dup', 'shared-skill');
+  await makeSkill(path.join(worktree, '.claude', 'skills'), 'dup', 'shared-skill');
+
+  const diag = await gatherDiagnostics({
+    cwd: tmp,
+    home: path.join(tmp, 'home'),
+    projectsDir: path.join(tmp, 'projects'),
+    activeSessionName: 'claude-feat',
+    activeProjectPath: worktree,
+    tmux: { listSessions: async () => [], hasSession: async () => false }
+  });
+  const message = formatDiagnosticsMessage(diag);
+
+  assert.equal(diag.localSkillNames.filter(n => n === 'shared-skill').length, 1);
+  assert.equal(message.split('\n').filter(l => l === '• shared-skill').length, 1);
+  assert.match(message, /📁 \*Local skills:\*/);
+  assert.ok(!/\*Global skills:\*/.test(message));
+
+  await fs.rm(tmp, { recursive: true, force: true });
 });
 
 test('formatDiagnosticsMessage strips the prefix from suffixed session names', async () => {
@@ -188,11 +259,10 @@ test('formatDiagnosticsMessage strips the prefix from suffixed session names', a
     activeSession: 'claude-my-app-2',
     activeSessionAlive: true,
     tmuxSessions: ['claude-my-app-2'],
-    skillSources: [],
-    totalScannedSkills: 0,
-    builtinsCount: 6,
-    pluginSources: [],
-    pluginSkillsCount: 0
+    localSkillNames: [],
+    globalSkillNames: [],
+    localPluginNames: [],
+    globalPluginNames: []
   });
 
   assert.match(message, /`my-app-2`/); // only the leading claude- is removed
