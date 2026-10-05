@@ -5,17 +5,24 @@ import path from 'node:path';
 import os from 'node:os';
 import { getProjectSlug, ClaudeSessionReader } from '../src/tmux/session_reader.js';
 
-test('getProjectSlug formats path into Claude project slug', () => {
-  // Test Windows style path: drive colon -> '-', each separator -> '-'
+test('getProjectSlug formats Windows style paths into Claude project slugs', () => {
+  // Windows style path: drive colon -> '-', each separator -> '-'
   // e.g. C:\Users\taro8\... -> C--Users-taro8-... (two dashes after drive letter)
-  const winPath = 'C:\\Users\\taro8\\Projects\\my-project';
-  const winSlug = getProjectSlug(winPath);
-  assert.equal(winSlug, 'C--Users-taro8-Projects-my-project');
+  if (process.platform !== 'win32') return; // path.resolve maps the drive only on Windows
+  assert.equal(
+    getProjectSlug(path.win32.resolve('C:\\Users\\taro8\\Projects\\my-project')),
+    'C--Users-taro8-Projects-my-project'
+  );
+});
 
-  // Test POSIX style path or absolute path
-  const posixPath = path.win32 ? 'C:\\home\\user\\projects\\my-project' : '/home/user/projects/my-project';
-  const posixSlug = getProjectSlug(posixPath);
-  assert.equal(posixSlug, 'C--home-user-projects-my-project');
+test('getProjectSlug formats POSIX style paths into Claude project slugs', () => {
+  // POSIX style path: no drive letter, leading separator -> '-'
+  // e.g. /home/user/projects/my-project -> -home-user-projects-my-project
+  if (process.platform === 'win32') return; // path.resolve anchors rootless paths to the cwd drive
+  assert.equal(
+    getProjectSlug(path.posix.resolve('/home/user/projects/my-project')),
+    '-home-user-projects-my-project'
+  );
 });
 
 test('getProjectSlug converts spaces to dashes to match Claude transcript dirs', async () => {
