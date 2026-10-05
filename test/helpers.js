@@ -1,5 +1,6 @@
 // Shared test helpers: fixtures and stub factories used across test files.
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 // Write a minimal SKILL.md into <root>/<folderName>/ as scanSkills expects it.
@@ -40,6 +41,7 @@ export function defaultTestConfig(overrides = {}) {
     botToken: '123456:TEST_TOKEN',
     allowedUserIds: ['111', '222'],
     projectsDir: process.cwd(),
+    claudeHome: path.join(os.homedir(), '.claude'),
     tmuxPath: 'tmux',
     pollIntervalMs: 1000,
     ...overrides
@@ -48,14 +50,15 @@ export function defaultTestConfig(overrides = {}) {
 
 // Stub Telegraf bot. Registered handlers are recorded for later dispatch:
 //   mockBot.handlers.on.text        -> bot.on('text', ...) handler
+//   mockBot.handlers.commands[name] -> bot.command(name, ...) handler
 //   mockBot.handlers.actions[..]    -> bot.action(pattern, ...) handlers,
 //                                      keyed by the pattern's toString()
 export function makeBotMock() {
-  const handlers = { on: {}, actions: {} };
+  const handlers = { on: {}, commands: {}, actions: {} };
   return {
     handlers,
     use: () => {},
-    command: () => {},
+    command: (name, handler) => { handlers.commands[name] = handler; },
     on: (evt, handler) => { handlers.on[evt] = handler; },
     action: (pattern, handler) => { handlers.actions[pattern.toString()] = handler; },
     telegram: {

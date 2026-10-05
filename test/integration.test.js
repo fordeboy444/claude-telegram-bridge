@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fsSync from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createBot } from '../src/index.js';
 import { makeBotMock, makeTmuxMock, defaultTestConfig, actionHandler } from './helpers.js';
+import { getProjectSlug } from '../src/tmux/session_reader.js';
 
 test('createBot initializes Telegraf instance with middleware, setMyCommands, and handlers', async () => {
   let commandsSet = null;
@@ -808,4 +811,69 @@ test('bridge startup generates the hook settings file next to the hook script', 
     settings.hooks.SessionStart[0].hooks[0].command,
     path.join(bridgeRoot, 'hooks', 'claude-session-id-sync.sh')
   );
+});
+
+test('enriched /status prints uptime, model, and running sub-agents from the transcript', async () => {
+  // Real transcript fixture under a temp claudeHome
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'status-int-'));
+  const claudeHome = path.join(tmpDir, '.claude');
+  const projectPath = path.resolve(tmpDir, 'proj');
+  const projectDir = path.join(claudeHome, 'projects', getProjectSlug(projectPath));
+  const boundId = 'sess-fixed-0001';
+  const subagentsDir = path.join(projectDir, boundId, 'subagents');
+  await fs.mkdir(subagentsDir, { recursive: true });
+
+  const now = Date.now();
+  const writeJ = (file, obj) => fs.writeFile(file, JSON.stringify(obj) + '\n');
+  await writeJ(path.join(projectDir, `${boundId}.jsonl`), {
+    type: 'user', timestamp: new Date(now - 25 * 60_000).toISOString()
+  });
+  await fs.appendFile(path.join(projectDir, `${boundId}.jsonl`),
+    JSON.stringify({
+      type: 'assistant', timestamp: new Date(now - 60_000).toISOString(),
+      message: { model: 'glm-5.3:cloud' }
+    }) + '\n');
+  await writeJ(path.join(subagentsDir, 'agent-a1.jsonl'), {
+    type: 'assistant', timestamp: new Date(now - 5 * 60_000).toISOString(),
+    isSidechain: true,
+    message: { model: 'haiku', usage: { input_tokens: 45000, output_tokens: 3000 } }
+  });
+  await writeJ(path.join(subagentsDir, 'agent-a1.meta.json'), {
+    agentType: 'general-purpose', description: 'Fix failing tests'
+  });
+  const s = (now - 10_000) / 1000;
+  await fs.utimes(path.join(projectDir, `${boundId}.jsonl`), s, s);
+  await fs.utimes(path.join(subagentsDir, 'agent-a1.jsonl'), s, s);
+
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock({
+    hasSession: async () => true,
+    getSessionOption: async (session, key) => (key === '@claude_session_id' ? boundId : null)
+  });
+  class MockReader {
+    start() {}
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'], projectsDir: tmpDir, claudeHome }), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-status-proj', 12345, projectPath);
+
+  const statusHandler = mockBot.handlers.commands.status;
+  assert.ok(statusHandler, 'status command handler registered');
+
+  const replies = [];
+  await statusHandler({ reply: async (text) => { replies.push(text); } });
+  const reply = replies.join('\n');
+
+  assert.match(reply, /claude-status-proj/, 'session name present');
+  assert.match(reply, /25m/, 'uptime from the first transcript record');
+  assert.match(reply, /glm-5\.3:cloud/, 'current model present');
+  assert.match(reply, /1 running · 0 finished/, 'running agent line present');
+  assert.match(reply, /Fix failing tests/, 'sub-agent label present');
+
+  botInstance.stop();
 });

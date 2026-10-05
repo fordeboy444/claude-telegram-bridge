@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import os from 'node:os';
 import { loadConfig } from '../src/config.js';
 
 test('loadConfig validates required variables and parses allowedUserIds', () => {
@@ -15,6 +17,20 @@ test('loadConfig validates required variables and parses allowedUserIds', () => 
   assert.equal(config.projectsDir, '/home/user/projects');
   assert.equal(config.tmuxPath, 'tmux');
   assert.equal(config.pollIntervalMs, 1000);
+});
+
+test('loadConfig defaults claudeHome to ~/.claude and honors CLAUDE_HOME', () => {
+  const fakeEnv = {
+    TELEGRAM_BOT_TOKEN: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+    ALLOWED_USER_IDS: '111222333',
+    CLAUDE_HOME: '/custom/claude-home'
+  };
+
+  assert.equal(loadConfig(fakeEnv).claudeHome, '/custom/claude-home');
+  assert.equal(
+    loadConfig({ ...fakeEnv, CLAUDE_HOME: undefined }).claudeHome,
+    path.join(os.homedir(), '.claude')
+  );
 });
 
 test('loadConfig throws when TELEGRAM_BOT_TOKEN is missing', () => {
