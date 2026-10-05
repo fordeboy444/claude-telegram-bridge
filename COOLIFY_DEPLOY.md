@@ -3,7 +3,7 @@
 ## 1. Application Creation
 - In Coolify, create a new Application from your GitHub repository.
 - Build pack: `Dockerfile`
-- Base directory: `/claude-telegram-bridge` (or `/` if deploying from a dedicated repo)
+- Base directory: `/` (the daemon lives at the repo root)
 - Dockerfile path: `/Dockerfile`
 
 ## 2. Persistent Storage (Volume)
@@ -15,13 +15,15 @@ Attach the existing Orca volume:
 Add the following environment variables in Coolify:
 - `TELEGRAM_BOT_TOKEN`: `<your-telegram-bot-token>`
 - `ALLOWED_USER_IDS`: `<your-telegram-numeric-user-id>`
-- `ANTHROPIC_BASE_URL`: `http://100.65.54.114:4000`
-- `ANTHROPIC_AUTH_TOKEN`: `<your-litellm-master-key>`
-- `ANTHROPIC_MODEL`: `glm-5.3-flash:cloud`
+- `ANTHROPIC_BASE_URL`: `https://ollama.com`
+- `ANTHROPIC_AUTH_TOKEN`: `<your-ollama.com-api-token>`
 - `HOME`: `/home/orca`
 - `PROJECTS_DIR`: `/home/orca`
 - `TMUX_PATH`: `tmux`
 - `POLL_INTERVAL_MS`: `1000`
+
+The daemon calls Ollama Cloud directly over the Anthropic protocol; the old LiteLLM gateway is decommissioned.
+For the full token and user-id walkthrough, see the **Prerequisites** section of `README.md`.
 
 ## 4. Verification
 After deploying:
