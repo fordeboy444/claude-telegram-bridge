@@ -35,6 +35,13 @@ Progress: [░░░░░░░░░░] 0%
 | 261005-mwt | /interrupt command: one Escape to the active tmux session | 2026-10-05 | b2b503b | — | .planning/quick/261005-mwt-interrupt-command-inject-an-interrupt-into-the-running-tmux |
 | 261005-mwu | /skills: include local project skills and local plugins in the skills browser | 2026-10-05 | a5a7cb1 | — | .planning/quick/261005-mwu-skills-include-local-project-skills-and-local-plugins-in-th |
 | 261005-mwv | Mirror Telegram-side messages into the Orca transcript (Branch B close-out, no code change) | 2026-10-05 | b2b503b | — | .planning/quick/261005-mwv-mirror-telegram-side-messages-into-the-orca-transcript-so-or |
+| 261005-qna | skills browser: one folder icon for all skills; globe removed | 2026-10-05 | d9f0761 | — | — |
+| 261005-qnc | projects: resume live session on project select | 2026-10-05 | b9d9d9e | — | — |
+| 261005-qne | status: strip claude- prefix from session names | 2026-10-05 | 77843ba | — | — |
+| 261005-qnf | project-resources: strip claude- prefix from session names | 2026-10-05 | c835f3e | — | — |
+| 261005-qng | effort: bare /effort opens the level picker | 2026-10-05 | d6d032b | — | — |
+| 261005-qnb | diag renamed to /project-resources with name-only skill/plugin lists | 2026-10-05 | c2a6af1 | — | — |
+| 261005-qnd | projects: refresh action card after End Session | 2026-10-05 | 54a50fd | — | — |
 
 ## Accumulated Context
 

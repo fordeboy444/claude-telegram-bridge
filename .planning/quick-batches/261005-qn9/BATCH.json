@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "batch_id": "261005-qn9",
+  "created_at": "2026-10-05T18:11:07.669Z",
+  "options": {},
+  "base_revision": "f36944edfb6df77eb2369bc34abc3ecd21a0e73f",
+  "items": [
+    {
+      "quick_id": "261005-qna",
+      "client_id": null,
+      "description": "/skills browser: use one folder icon (folder-emoji glyph currently in use) for ALL skills, local and global; remove the globe icon. Plugins keep the jigsaw icon for both local and global.",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/skills/menu.js",
+        "src/skills/scanner.js",
+        "test/skills_menu.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "d9f0761",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-qnb",
+      "client_id": null,
+      "description": "/diag rework: rename command to /project-resources, keep /diag working as hidden alias. Remove source paths and skill-count rows; replace the Skill sources block with plain name-only lists: Local skills, Global skills, Local plugins, Global plugins.",
+      "status": "complete",
+      "depends_on": [
+        "261005-qnf"
+      ],
+      "planned_files": [
+        "src/index.js",
+        "src/diagnostics.js",
+        "test/diagnostics.test.js",
+        "test/integration.test.js",
+        "README.md"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 2,
+      "commit": "c2a6af1",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-qnc",
+      "client_id": null,
+      "description": "/projects: when the user picks a project with a live running session, enter/resume that existing session instead of starting fresh; start fresh only when no live session or the user stopped it.",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/index.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "b9d9d9e",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-qnd",
+      "client_id": null,
+      "description": "/projects: fix stale button state - after End Session the action card must show Start Session again and the Status line must reflect termination.",
+      "status": "complete",
+      "depends_on": [
+        "261005-qnc"
+      ],
+      "planned_files": [
+        "src/index.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 3,
+      "commit": "54a50fd",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-qne",
+      "client_id": null,
+      "description": "/status: strip the claude- prefix from session names, show folder name only (Main-Agent).",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/status_report.js",
+        "test/status_report.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "77843ba",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-qnf",
+      "client_id": null,
+      "description": "/project-resources: strip the claude- prefix from the active session line and the tmux claude sessions list.",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/diagnostics.js",
+        "test/diagnostics.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "c835f3e",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-qng",
+      "client_id": null,
+      "description": "/effort: picker offering low / medium / high / xhigh / max (Faster to Smarter order).",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/index.js",
+        "src/skills/scanner.js",
+        "test/skills_scanner.test.js",
+        "test/integration.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 1,
+      "commit": "d6d032b",
+      "failure_reason": null
+    }
+  ]
+}
