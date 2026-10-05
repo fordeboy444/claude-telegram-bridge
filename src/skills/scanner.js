@@ -28,12 +28,16 @@ export function sanitizeTelegramCommand(name) {
 }
 
 // Each directory carries the label shown to the user (📁 local / 🌐 global / project).
-export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName }) {
+// An explicit projectPath (the real worktree path from orca-data.json) wins;
+// the name-derived path stays as fallback for older callers that cannot pass one.
+export function resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName, projectPath }) {
   const dirs = [
     { dir: path.join(cwd, '.claude', 'skills'), source: 'local' },
     { dir: path.join(home, '.claude', 'skills'), source: 'global' }
   ];
-  if (activeSessionName && projectsDir) {
+  if (projectPath) {
+    dirs.push({ dir: path.join(projectPath, '.claude', 'skills'), source: 'project' });
+  } else if (activeSessionName && projectsDir) {
     dirs.push({
       dir: path.join(projectsDir, projectNameFromSession(activeSessionName), '.claude', 'skills'),
       source: 'project'

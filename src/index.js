@@ -156,16 +156,14 @@ export function createBot(config, deps = {}) {
       cwd: process.cwd(),
       home: os.homedir(),
       projectsDir: config.projectsDir,
-      activeSessionName
+      activeSessionName,
+      projectPath: activeProjectPath
     });
     const scanned = await scanSkills(dirs);
     const builtins = getBuiltInCommands();
     let pluginSkills = [];
     try {
-      const projectPath = activeSessionName
-        ? path.join(config.projectsDir, projectNameFromSession(activeSessionName))
-        : null;
-      pluginSkills = await scanPluginSkills({ home: os.homedir(), projectPath });
+      pluginSkills = await scanPluginSkills({ home: os.homedir(), projectPath: activeProjectPath });
     } catch (err) {
       console.warn('⚠️ Plugin skill scan failed:', err.message);
     }
@@ -197,12 +195,14 @@ export function createBot(config, deps = {}) {
 
     activeSessionName = sessionName;
     activeChatId = chatId;
-    activeProjectPath = null;
+    // Real Orca worktree paths differ from projectsDir/<name>; projectNameFromSession
+    // cannot invert normalizeName, so the passed projectPath is authoritative for
+    // both the reader and the skills scans. A null session clears it.
+    const resolvedProjectPath = projectPath || path.join(config.projectsDir, projectNameFromSession(sessionName));
+    activeProjectPath = sessionName ? resolvedProjectPath : null;
 
     if (sessionName && chatId) {
       refreshSkills().catch(err => console.warn('⚠️ Skill refresh failed:', err.message));
-      const resolvedProjectName = projectNameFromSession(sessionName);
-      const resolvedProjectPath = projectPath || path.join(config.projectsDir, resolvedProjectName);
 
       // Bind the reader to this tmux session's own transcript. Sessions
       // launched before session binding have no option -> null -> newest-file fallback.
@@ -217,10 +217,6 @@ export function createBot(config, deps = {}) {
       // option above; abandon this superseded switch so we never overwrite
       // the newer reader.
       if (myEpoch !== readerEpoch) return;
-
-      // Real Orca project paths differ from projectsDir; /status reuses this
-      // value instead of recomputing it.
-      activeProjectPath = resolvedProjectPath;
 
       activeSessionReader = new SessionReaderClass({ claudeHome: config.claudeHome });
       activeSessionReader.start(
@@ -378,6 +374,7 @@ export function createBot(config, deps = {}) {
       home: os.homedir(),
       projectsDir: config.projectsDir,
       activeSessionName,
+      activeProjectPath,
       tmux
     });
     await ctx.reply(formatDiagnosticsMessage(diag), { parse_mode: 'Markdown' });
@@ -739,6 +736,7 @@ export function createBot(config, deps = {}) {
     getActiveState: () => ({
       activeSessionName,
       activeChatId,
+      activeProjectPath,
       pendingArgsSkill,
       typingActive: Boolean(typingTimer)
     }),

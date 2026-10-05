@@ -7,8 +7,14 @@ import path from 'node:path';
 import { scanSkills, getBuiltInCommands, resolveSkillsDirectories, scanPluginSkills } from './skills/scanner.js';
 import { projectNameFromSession } from './projects/manager.js';
 
-export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionName, tmux }) {
-  const dirs = resolveSkillsDirectories({ cwd, home, projectsDir, activeSessionName });
+export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionName, activeProjectPath, tmux }) {
+  const dirs = resolveSkillsDirectories({
+    cwd,
+    home,
+    projectsDir,
+    activeSessionName,
+    projectPath: activeProjectPath
+  });
 
   const skillSources = [];
   const seen = new Set();
@@ -39,9 +45,11 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
 
   let pluginSkills = [];
   try {
-    const pluginProjectPath = activeSessionName && projectsDir
-      ? path.join(projectsDir, projectNameFromSession(activeSessionName))
-      : null;
+    // Explicit project path wins; the name-derived path stays as fallback.
+    const pluginProjectPath = activeProjectPath
+      || (activeSessionName && projectsDir
+        ? path.join(projectsDir, projectNameFromSession(activeSessionName))
+        : null);
     pluginSkills = await scanPluginSkills({ home, projectPath: pluginProjectPath });
   } catch {
     pluginSkills = [];

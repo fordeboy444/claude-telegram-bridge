@@ -39,6 +39,25 @@ test('resolveSkillsDirectories omits project dir when no session is active', () 
   ]);
 });
 
+test('resolveSkillsDirectories prefers an explicit projectPath over the name-derived path', () => {
+  // Real Orca worktree paths come from orca-data.json and do not sit under
+  // projectsDir/<session-name>, so the caller passes the true path.
+  const explicitPath = '/worktrees/my-app-feat';
+  const dirs = resolveSkillsDirectories({
+    cwd: '/bridge',
+    home: '/home/user',
+    projectsDir: '/projects',
+    activeSessionName: 'claude-my-app',
+    projectPath: explicitPath
+  });
+
+  assert.deepEqual(dirs, [
+    { dir: path.join('/bridge', '.claude', 'skills'), source: 'local' },
+    { dir: path.join('/home/user', '.claude', 'skills'), source: 'global' },
+    { dir: path.join(explicitPath, '.claude', 'skills'), source: 'project' }
+  ]);
+});
+
 test('scanSkills finds skills from every source directory (local + user + project)', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'discovery-test-'));
   const localDir = path.join(tmp, 'local');

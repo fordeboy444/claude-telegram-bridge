@@ -125,6 +125,39 @@ test('gatherDiagnostics lists plugin skill sources', async () => {
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
+test('gatherDiagnostics scans the explicit activeProjectPath and matches plugin installs against it', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-projpath-'));
+  const home = path.join(tmp, 'home');
+  const worktreePath = path.join(tmp, 'worktrees', 'feat'); // NOT under projectsDir/<session-name>
+  await makeSkill(path.join(worktreePath, '.claude', 'skills'), 'proj-skill', 'worktree-skill');
+  const installPath = path.join(tmp, 'plugins', 'bridge');
+  await makePluginSkill(installPath, 'deploy', 'deploy', 'Deploy app');
+  await fs.mkdir(path.join(home, '.claude', 'plugins'), { recursive: true });
+  await fs.writeFile(
+    path.join(home, '.claude', 'plugins', 'installed_plugins.json'),
+    JSON.stringify({ plugins: { 'bridge@market': [{ installPath, projectPath: worktreePath.toUpperCase() }] } })
+  );
+
+  const diag = await gatherDiagnostics({
+    cwd: tmp,
+    home,
+    projectsDir: path.join(tmp, 'projects'),
+    activeSessionName: 'claude-feat',
+    activeProjectPath: worktreePath,
+    tmux: { listSessions: async () => [], hasSession: async () => false }
+  });
+
+  const project = diag.skillSources.find(s => s.source === 'project');
+  assert.ok(project, 'project source present');
+  assert.equal(project.dir, path.join(worktreePath, '.claude', 'skills'));
+  assert.equal(project.skillCount, 1);
+  assert.deepEqual(project.skillNames, ['worktree-skill']);
+
+  assert.equal(diag.pluginSkillsCount, 1, 'project-scoped install matched against the worktree path');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
 test('formatDiagnosticsMessage renders readable Telegram markdown', async () => {
   const message = formatDiagnosticsMessage({
     activeSession: 'claude-my-app',

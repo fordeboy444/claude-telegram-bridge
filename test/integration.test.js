@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createBot } from '../src/index.js';
-import { makeBotMock, makeTmuxMock, defaultTestConfig, actionHandler } from './helpers.js';
+import { makeBotMock, makeTmuxMock, defaultTestConfig, actionHandler, makeSkill } from './helpers.js';
 import { getProjectSlug } from '../src/tmux/session_reader.js';
 
 test('createBot initializes Telegraf instance with middleware, setMyCommands, and handlers', async () => {
@@ -945,6 +945,32 @@ test('/interrupt warns when no session is connected and sends nothing', async ()
   assert.equal(botInstance.getActiveState().activeSessionName, null);
 
   botInstance.stop();
+});
+
+test('/skills lists project skills from the real worktree path, not the name-derived dir', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'skills-int-'));
+  // Orca worktree path: deliberately NOT <projectsDir>/<session-name>
+  const tmpProjectDir = await fs.mkdtemp(path.join(tmp, 'worktree-'));
+  await makeSkill(path.join(tmpProjectDir, '.claude', 'skills'), 'wt-skill', 'worktree-skill');
+
+  const mockBot = makeBotMock();
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: class { start() {} stop() {} }
+  });
+
+  await botInstance.switchActiveSession('claude-test', 12345, tmpProjectDir);
+  const skills = await botInstance.refreshSkills();
+
+  assert.ok(
+    skills.some(s => s.id === 'skill:worktree-skill' && s.source === 'project'),
+    `expected the worktree project skill in the list, got: ${skills.map(s => s.name).join(', ')}`
+  );
+  assert.equal(botInstance.getActiveState().activeProjectPath, tmpProjectDir);
+
+  botInstance.stop();
+  await fs.rm(tmp, { recursive: true, force: true });
 });
 
 test('/interrupt clears the question card so later taps expire', async () => {
