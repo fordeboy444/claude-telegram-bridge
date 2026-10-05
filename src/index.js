@@ -571,6 +571,20 @@ export function createBot(config, deps = {}) {
     await projectManager.killProjectSessions(projectName);
 
     await ctx.answerCbQuery('Sessions terminated');
+
+    // Re-render the action view so the user immediately sees Start Session
+    // and the idle status instead of the stale End Session button.
+    const fresh = (await projectManager.listProjects()).find(
+      p => p.name === projectName || p.displayName === projectName
+    );
+    if (fresh) {
+      const view = buildProjectActionView(fresh);
+      try {
+        await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
+      } catch (err) {
+        console.warn('⚠️ Project card refresh failed:', err.message);
+      }
+    }
     await ctx.reply(`🛑 All sessions for \`${projectName}\` terminated.`, { parse_mode: 'Markdown' });
   });
 
