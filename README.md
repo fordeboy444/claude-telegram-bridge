@@ -10,7 +10,7 @@ It gives you full bidirectional terminal interaction on your smartphone: send pr
 
 - 🔄 **Live Terminal Mirroring:** Read Claude Code's responses as they appear in the terminal, streamed back as clean Markdown text.
 - 📱 **Remote Control Anywhere:** Send instructions, questions, and replies from Telegram directly into Claude's prompt.
-- 🛠️ **Interactive Skills Browser:** Browse, inspect, and trigger built-in commands (`/clear`, `/compact`, `/model`, `/effort`) and custom skills with single taps or argument prompts.
+- 🛠️ **Interactive Skills Browser:** Browse, inspect, and trigger built-in commands (`/clear`, `/compact`, `/model`, `/effort`), custom skills, and — with a session active — the session's project (worktree) skills plus local plugin installs, each tagged by source (local / global / plugin / 🧩 local plugin).
 - 📁 **Project Workspace Dashboard:** View project directories, inspect active sessions, launch fresh sessions, or terminate them with clean status badges (🟢 running / ⚪ idle).
 - 🛡️ **Whitelist Security:** Only authorized Telegram user IDs can interact with your machine; unauthorized messages are dropped silently.
 
@@ -113,7 +113,7 @@ Open your Telegram bot and send `/start`!
 |---|---|
 | `/start` | Welcome overview and quick usage instructions. |
 | `/projects` | Opens the Project Dashboard showing all workspaces and active tmux session status badges. |
-| `/skills` | Opens the paginated Skills Browser to inspect details, execute skills, or run with arguments. |
+| `/skills` | Opens the paginated Skills Browser to inspect details, execute skills, or run with arguments. Includes project (worktree) skills and local plugin installs when a session is active. |
 | `/status` | Displays currently focused project session and online/offline status. |
 | `/interrupt` | Sends one Escape key to the active session. Claude Code stops the current task. |
 | `/help` | Detailed help and button action explanations. |
