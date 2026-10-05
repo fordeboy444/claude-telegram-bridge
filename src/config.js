@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import path from 'node:path';
+import os from 'node:os';
 dotenv.config();
 
 export function loadConfig(env = process.env) {
@@ -25,6 +27,7 @@ export function loadConfig(env = process.env) {
     botToken,
     allowedUserIds,
     projectsDir: env.PROJECTS_DIR || process.cwd(),
+    claudeHome: env.CLAUDE_HOME || path.join(os.homedir(), '.claude'),
     tmuxPath: env.TMUX_PATH || 'tmux',
     pollIntervalMs: Number(env.POLL_INTERVAL_MS) || 1000
   };

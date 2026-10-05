@@ -16,6 +16,59 @@ export function getProjectSlug(projectPath) {
     .replace(/ /g, '-');
 }
 
+// Shared path helpers (also used by src/status_report.js for /status).
+
+export async function resolveClaudeProjectDir(claudeHome, projectPath) {
+  const slug = getProjectSlug(projectPath);
+  const projectsRoot = path.join(claudeHome, 'projects');
+  const projectDir = path.join(projectsRoot, slug);
+
+  try {
+    await fs.access(projectDir);
+    return projectDir;
+  } catch {}
+
+  // Claude's own slug drive-letter casing can vary; fall back to a
+  // case-insensitive directory match if the exact name is missing.
+  try {
+    const lower = slug.toLowerCase();
+    const entries = await fs.readdir(projectsRoot, { withFileTypes: true });
+    const match = entries.find(e => e.isDirectory() && e.name.toLowerCase() === lower);
+    return match ? path.join(projectsRoot, match.name) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function findLatestJsonlFile(projectDir) {
+  try {
+    const entries = await fs.readdir(projectDir, { withFileTypes: true });
+    const jsonlFiles = entries
+      .filter(e => e.isFile() && e.name.endsWith('.jsonl'))
+      .map(e => ({
+        name: e.name,
+        fullPath: path.join(projectDir, e.name)
+      }));
+
+    if (jsonlFiles.length === 0) {
+      return null;
+    }
+
+    // Sort by mtime descending
+    const stats = await Promise.all(
+      jsonlFiles.map(async f => ({
+        ...f,
+        mtime: (await fs.stat(f.fullPath)).mtimeMs
+      }))
+    );
+
+    stats.sort((a, b) => b.mtime - a.mtime);
+    return stats[0].fullPath;
+  } catch {
+    return null;
+  }
+}
+
 export class ClaudeSessionReader {
   constructor(options = {}) {
     this.claudeHome = options.claudeHome || path.join(os.homedir(), '.claude');
@@ -26,25 +79,7 @@ export class ClaudeSessionReader {
   }
 
   async resolveProjectDir(projectPath) {
-    const slug = getProjectSlug(projectPath);
-    const projectsRoot = path.join(this.claudeHome, 'projects');
-    const projectDir = path.join(projectsRoot, slug);
-
-    try {
-      await fs.access(projectDir);
-      return projectDir;
-    } catch {}
-
-    // Claude's own slug drive-letter casing can vary; fall back to a
-    // case-insensitive directory match if the exact name is missing.
-    try {
-      const lower = slug.toLowerCase();
-      const entries = await fs.readdir(projectsRoot, { withFileTypes: true });
-      const match = entries.find(e => e.isDirectory() && e.name.toLowerCase() === lower);
-      return match ? path.join(projectsRoot, match.name) : null;
-    } catch {
-      return null;
-    }
+    return resolveClaudeProjectDir(this.claudeHome, projectPath);
   }
 
   async findLatestSessionFile(projectPath) {
@@ -53,29 +88,7 @@ export class ClaudeSessionReader {
       if (!projectDir) {
         return null;
       }
-
-      const entries = await fs.readdir(projectDir, { withFileTypes: true });
-      const jsonlFiles = entries
-        .filter(e => e.isFile() && e.name.endsWith('.jsonl'))
-        .map(e => ({
-          name: e.name,
-          fullPath: path.join(projectDir, e.name)
-        }));
-
-      if (jsonlFiles.length === 0) {
-        return null;
-      }
-
-      // Sort by mtime descending
-      const stats = await Promise.all(
-        jsonlFiles.map(async f => ({
-          ...f,
-          mtime: (await fs.stat(f.fullPath)).mtimeMs
-        }))
-      );
-
-      stats.sort((a, b) => b.mtime - a.mtime);
-      return stats[0].fullPath;
+      return findLatestJsonlFile(projectDir);
     } catch {
       return null;
     }
