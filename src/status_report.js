@@ -330,7 +330,9 @@ function renderStatusLines({ sessionName, alive, status, now, labelMax, maxListe
   const lines = ['📊 *Session Status*'];
 
   const stateMark = alive ? '🟢 Online' : '🔴 Terminated';
-  const name = sanitizeLabel(sessionName || 'unknown');
+  // Display name only: sessions are named claude-<folder>; show the folder part.
+  const displayName = sessionName ? sessionName.replace(/^claude-/, '') : '';
+  const name = sanitizeLabel(displayName || 'unknown');
   lines.push(`🎯 \`${name}\` ${stateMark}`);
 
   if (status && status.model) {
