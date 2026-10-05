@@ -173,11 +173,29 @@ test('formatDiagnosticsMessage renders readable Telegram markdown', async () => 
     pluginSkillsCount: 2
   });
 
-  assert.match(message, /claude-my-app/);
+  assert.match(message, /`my-app`/); // project name shown, prefix stripped
+  assert.ok(!/claude-my-app/.test(message)); // raw session name gone
   assert.match(message, /🟢/); // alive session
   assert.match(message, /2 skill/);
   assert.match(message, /❌/); // missing dir marker
   assert.match(message, /🧩/); // plugin section rendered
   assert.match(message, /2 plugin/);
   assert.ok(!message.includes('undefined'));
+});
+
+test('formatDiagnosticsMessage strips the prefix from suffixed session names', async () => {
+  const message = formatDiagnosticsMessage({
+    activeSession: 'claude-my-app-2',
+    activeSessionAlive: true,
+    tmuxSessions: ['claude-my-app-2'],
+    skillSources: [],
+    totalScannedSkills: 0,
+    builtinsCount: 6,
+    pluginSources: [],
+    pluginSkillsCount: 0
+  });
+
+  assert.match(message, /`my-app-2`/); // only the leading claude- is removed
+  assert.ok(!/claude-my-app/.test(message));
+  assert.ok(!/my-app-2-2/.test(message)); // no double strip of the inner text
 });
