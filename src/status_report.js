@@ -26,7 +26,9 @@ async function readFirstLineTimestamp(filePath) {
       const { buffer } = await handle.read(Buffer.alloc(8192), 0, 8192, 0);
       const firstLine = buffer.toString('utf8').split('\n')[0];
       const record = JSON.parse(firstLine);
-      return record && typeof record.timestamp === 'string' ? record.timestamp : null;
+      if (!record || typeof record.timestamp !== 'string') return null;
+      const ts = Date.parse(record.timestamp);
+      return Number.isNaN(ts) ? null : ts;
     } finally {
       await handle.close();
     }
