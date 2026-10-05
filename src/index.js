@@ -446,11 +446,14 @@ export function createBot(config, deps = {}) {
 
   bot.action(/proj_kill:(.+)/, async (ctx) => {
     const projectName = ctx.match[1];
-    const activeSessionNorm = activeSessionName ? activeSessionName.replace(/^claude-/, '') : '';
-    const targetNorm = projectManager.normalizeSessionName(projectName);
-    const expectedActiveSession = `claude-${targetNorm}`;
-
-    if (activeSessionName === expectedActiveSession) {
+    // listProjects/killProjectSessions treat a project's sessions as
+    // claude-<norm> and any claude-<norm>-<suffix> variant; the active
+    // connection must be cleared for both shapes.
+    const targetPrefix = `claude-${projectManager.normalizeSessionName(projectName)}`;
+    if (
+      activeSessionName === targetPrefix ||
+      activeSessionName.startsWith(`${targetPrefix}-`)
+    ) {
       switchActiveSession(null, null, null);
     }
 
