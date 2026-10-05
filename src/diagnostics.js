@@ -107,12 +107,12 @@ export function formatDiagnosticsMessage(diag) {
 
   if (diag.activeSession) {
     const status = diag.activeSessionAlive ? '🟢 Online' : '🔴 Terminated';
-    lines.push(`🎯 *Active session:* \`${diag.activeSession}\` (${status})`);
+    lines.push(`🎯 *Active session:* \`${projectNameFromSession(diag.activeSession)}\` (${status})`);
   } else {
     lines.push('⚪ *No active session.*');
   }
   lines.push(
-    `🖥️ *tmux claude sessions:* ${diag.tmuxSessions.length ? diag.tmuxSessions.map(s => `\`${s}\``).join(', ') : 'none'}`,
+    `🖥️ *tmux claude sessions:* ${diag.tmuxSessions.length ? diag.tmuxSessions.map(s => `\`${projectNameFromSession(s)}\``).join(', ') : 'none'}`,
     ''
   );
 
