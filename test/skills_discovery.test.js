@@ -8,16 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { scanSkills, resolveSkillsDirectories } from '../src/skills/scanner.js';
-
-async function makeSkill(root, folderName, name, description = 'A test skill') {
-  const skillFolder = path.join(root, folderName);
-  await fs.mkdir(skillFolder, { recursive: true });
-  await fs.writeFile(
-    path.join(skillFolder, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\nBody`
-  );
-  return skillFolder;
-}
+import { makeSkill } from './helpers.js';
 
 test('resolveSkillsDirectories includes local, user and project skill dirs', () => {
   const dirs = resolveSkillsDirectories({

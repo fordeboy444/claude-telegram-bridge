@@ -7,24 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { scanPluginSkills } from '../src/skills/scanner.js';
-
-async function makePluginSkill(installPath, folder, name, description) {
-  const skillFolder = path.join(installPath, 'skills', folder);
-  await fs.mkdir(skillFolder, { recursive: true });
-  await fs.writeFile(
-    path.join(skillFolder, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\nBody`
-  );
-}
-
-async function writePluginsFile(home, plugins) {
-  const pluginsDir = path.join(home, '.claude', 'plugins');
-  await fs.mkdir(pluginsDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginsDir, 'installed_plugins.json'),
-    JSON.stringify({ version: 2, plugins }, null, 2)
-  );
-}
+import { makePluginSkill, writePluginsFile } from './helpers.js';
 
 test('scanPluginSkills lists global plugin installs', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-global-'));

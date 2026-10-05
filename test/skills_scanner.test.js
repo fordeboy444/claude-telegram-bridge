@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand } from '../src/skills/scanner.js';
+import { makeSkill } from './helpers.js';
 
 test('getBuiltInCommands keeps clear+compact and adds model/effort pickers', () => {
   const builtins = getBuiltInCommands();
@@ -32,12 +33,7 @@ test('sanitizeTelegramCommand produces valid Telegram command identifiers', () =
 
 test('scanSkills reads yaml frontmatter from SKILL.md files', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'skills-test-'));
-  const skillFolder = path.join(tmpDir, 'test-skill');
-  await fs.mkdir(skillFolder, { recursive: true });
-  await fs.writeFile(
-    path.join(skillFolder, 'SKILL.md'),
-    `---\nname: my-skill\ndescription: A useful skill *bold* and _italic_\n---\nBody here`
-  );
+  await makeSkill(tmpDir, 'test-skill', 'my-skill', 'A useful skill *bold* and _italic_');
 
   const skills = await scanSkills([tmpDir]);
   assert.equal(skills.length, 1);

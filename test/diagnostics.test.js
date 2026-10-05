@@ -7,24 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { gatherDiagnostics, formatDiagnosticsMessage } from '../src/diagnostics.js';
-
-async function makeSkill(root, folderName, name) {
-  const skillFolder = path.join(root, folderName);
-  await fs.mkdir(skillFolder, { recursive: true });
-  await fs.writeFile(
-    path.join(skillFolder, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: Test skill ${name}\n---\nBody`
-  );
-}
-
-async function makePluginSkill(installPath, folder, name, description) {
-  const skillFolder = path.join(installPath, 'skills', folder);
-  await fs.mkdir(skillFolder, { recursive: true });
-  await fs.writeFile(
-    path.join(skillFolder, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\nBody`
-  );
-}
+import { makeSkill, makePluginSkill } from './helpers.js';
 
 test('gatherDiagnostics reports skill counts per source directory', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'diag-test-'));

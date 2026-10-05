@@ -4,32 +4,20 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBot } from '../src/index.js';
+import { makeBotMock, makeTmuxMock, defaultTestConfig, actionHandler } from './helpers.js';
 
 test('createBot initializes Telegraf instance with middleware, setMyCommands, and handlers', async () => {
   let commandsSet = null;
   const commandScopes = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    action: () => {},
-    command: () => {},
-    telegram: {
-      setMyCommands: async (cmds, extra) => {
-        if (!extra || !extra.scope || extra.scope.type === 'default') {
-          commandsSet = cmds;
-        }
-        commandScopes.push(extra && extra.scope ? extra.scope.type : 'default');
-      }
+  const mockBot = makeBotMock();
+  mockBot.telegram.setMyCommands = async (cmds, extra) => {
+    if (!extra || !extra.scope || extra.scope.type === 'default') {
+      commandsSet = cmds;
     }
+    commandScopes.push(extra && extra.scope ? extra.scope.type : 'default');
   };
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111', '222'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const config = defaultTestConfig();
 
   const { bot, switchActiveSession, getActiveState } = createBot(config, { bot: mockBot });
   // Allow the fire-and-forget updateBotCommands() loop to finish both scopes
@@ -48,27 +36,12 @@ test('createBot initializes Telegraf instance with middleware, setMyCommands, an
 
 test('updateBotCommands logs a warning when Telegram command sync fails', async (t) => {
   const warn = t.mock.method(console, 'warn');
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {
-        throw new Error('network down');
-      }
-    }
+  const mockBot = makeBotMock();
+  mockBot.telegram.setMyCommands = async () => {
+    throw new Error('network down');
   };
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  createBot(config, { bot: mockBot });
+  createBot(defaultTestConfig(), { bot: mockBot });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(warn.mock.callCount() >= 1, 'expected a warning for failed command sync');
@@ -79,32 +52,14 @@ test('updateBotCommands logs a warning when Telegram command sync fails', async 
 });
 
 test('qa callback action answers a single-choice question with digit then Enter', async () => {
-  let qaHandler = null;
   const sentSequences = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: (pattern, handler) => {
-      if (pattern.toString().includes('qa:')) {
-        qaHandler = handler;
-      }
-    },
-    telegram: {
-      setMyCommands: async () => {},
-      sendMessage: async () => {},
-      sendChatAction: async () => {}
-    }
-  };
+  const mockBot = makeBotMock();
 
-  const mockTmux = {
-    hasSession: async () => true,
-    capturePane: async () => '❯ normal terminal output',
-    sendKeys: async () => {},
+  const mockTmux = makeTmuxMock({
     sendKeysWithDelay: async (session, keys) => {
       sentSequences.push({ session, keys });
     }
-  };
+  });
 
   let readerOnEvent = null;
   class MockReader {
@@ -112,15 +67,11 @@ test('qa callback action answers a single-choice question with digit then Enter'
     stop() {}
   }
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111', '222'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  const botInstance = createBot(config, { bot: mockBot, tmux: mockTmux, sessionReaderClass: MockReader });
+  const botInstance = createBot(defaultTestConfig(), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
   readerOnEvent({
@@ -128,6 +79,7 @@ test('qa callback action answers a single-choice question with digit then Enter'
     content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }
   });
 
+  const qaHandler = actionHandler(mockBot, 'qa:');
   assert.ok(qaHandler, 'qa action handler registered');
 
   let cbAnswer = null;
@@ -153,39 +105,19 @@ test('qa callback action answers a single-choice question with digit then Enter'
 });
 
 test('qa toggle and submit_q handle multiSelect question answers with key sequence', async () => {
-  let qaHandler = null;
-  let submitHandler = null;
   const sentSequences = [];
   let sentKeys = [];
 
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: (pattern, handler) => {
-      const str = pattern.toString();
-      if (str.includes('qa:')) {
-        qaHandler = handler;
-      } else if (str.includes('submit_q')) {
-        submitHandler = handler;
-      }
-    },
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async () => {}
-    }
-  };
+  const mockBot = makeBotMock();
 
-  const mockTmux = {
-    hasSession: async () => true,
-    capturePane: async () => '❯ normal terminal output',
+  const mockTmux = makeTmuxMock({
     sendKeys: async (session, keys, enter) => {
       sentKeys.push({ session, keys, enter });
     },
     sendKeysWithDelay: async (session, keys) => {
       sentSequences.push({ session, keys });
     }
-  };
+  });
 
   class MockReader {
     start(projPath, onEvent) {
@@ -195,15 +127,7 @@ test('qa toggle and submit_q handle multiSelect question answers with key sequen
   }
   let mockReaderInstance = null;
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111', '222'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig(), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: function() {
@@ -214,6 +138,8 @@ test('qa toggle and submit_q handle multiSelect question answers with key sequen
 
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
+  const qaHandler = actionHandler(mockBot, 'qa:');
+  const submitHandler = actionHandler(mockBot, 'submit_q');
   assert.ok(qaHandler, 'qa action registered');
   assert.ok(submitHandler, 'submit_q action registered');
 
@@ -273,44 +199,23 @@ test('qa toggle and submit_q handle multiSelect question answers with key sequen
 });
 
 test('text handler routes direct slash commands to active tmux session', async () => {
-  let textHandler = null;
-  let sentKeys = [];
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => {
-      if (evt === 'text') {
-        textHandler = handler;
-      }
-    },
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {}
-    }
-  };
+  const sentKeys = [];
+  const mockBot = makeBotMock();
 
-  const mockTmux = {
-    hasSession: async () => true,
+  const mockTmux = makeTmuxMock({
     capturePane: async () => '',
     sendKeys: async (session, keys, enter) => {
       sentKeys.push({ session, keys, enter });
     }
-  };
+  });
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111', '222'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  const botInstance = createBot(config, { bot: mockBot, tmux: mockTmux });
+  const botInstance = createBot(defaultTestConfig(), { bot: mockBot, tmux: mockTmux });
   const { switchActiveSession, refreshSkills } = botInstance;
 
   await refreshSkills();
   switchActiveSession('claude-test', 12345);
 
+  const textHandler = mockBot.handlers.on.text;
   assert.ok(textHandler, 'text handler registered');
 
   let repliedText = null;
@@ -331,46 +236,23 @@ test('text handler routes direct slash commands to active tmux session', async (
 });
 
 test('text handler auto-attaches to single running session when activeSessionName is null', async () => {
-  let textHandler = null;
-  let sentKeys = [];
-  let chatActions = [];
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => {
-      if (evt === 'text') {
-        textHandler = handler;
-      }
-    },
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); }
-    }
-  };
+  const sentKeys = [];
+  const chatActions = [];
+  const mockBot = makeBotMock();
+  mockBot.telegram.sendChatAction = async (chatId, action) => { chatActions.push({ chatId, action }); };
 
-  const mockTmux = {
-    hasSession: async () => true,
+  const mockTmux = makeTmuxMock({
     listSessions: async () => ['claude-auto-project'],
-    getSessionOption: async () => null,
     sendKeys: async (session, keys, enter) => {
       sentKeys.push({ session, keys, enter });
     }
-  };
+  });
 
   const mockProjectManager = {
     findProjectBySession: async () => ({ name: 'auto-project', path: '/tmp/auto-project' })
   };
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111', '222'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig(), {
     bot: mockBot,
     tmux: mockTmux,
     projectManager: mockProjectManager
@@ -383,7 +265,7 @@ test('text handler auto-attaches to single running session when activeSessionNam
     reply: async (text) => { replies.push(text); }
   };
 
-  await textHandler(mockCtx);
+  await mockBot.handlers.on.text(mockCtx);
 
   assert.equal(sentKeys.length, 1);
   assert.equal(sentKeys[0].session, 'claude-auto-project');
@@ -395,29 +277,15 @@ test('text handler auto-attaches to single running session when activeSessionNam
 });
 
 test('switchActiveSession binds the reader to the tmux session id option', async () => {
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: { setMyCommands: async () => {} }
-  };
+  const mockBot = makeBotMock();
 
   const optionCalls = [];
-  const mockTmux = {
+  const mockTmux = makeTmuxMock({
     getSessionOption: async (session, key) => {
       optionCalls.push({ session, key });
       return 'sid-uuid-1';
     }
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  });
 
   const readers = [];
   class MockReader {
@@ -431,7 +299,7 @@ test('switchActiveSession binds the reader to the tmux session id option', async
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -450,25 +318,8 @@ test('switchActiveSession binds the reader to the tmux session id option', async
 });
 
 test('switchActiveSession falls back to newest-file reading when the session has no stored session id', async () => {
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: { setMyCommands: async () => {} }
-  };
-
-  const mockTmux = {
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock({ getSessionOption: async () => null });
 
   const readers = [];
   class MockReader {
@@ -482,7 +333,7 @@ test('switchActiveSession falls back to newest-file reading when the session has
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -498,29 +349,9 @@ test('switchActiveSession falls back to newest-file reading when the session has
 });
 
 test('result events from the reader stop the typing indicator', async () => {
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async () => {},
-      sendMessage: async () => {}
-    }
-  };
+  const mockBot = makeBotMock();
 
-  const mockTmux = {
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const mockTmux = makeTmuxMock();
 
   const sentMessages = [];
   mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
@@ -533,7 +364,7 @@ test('result events from the reader stop the typing indicator', async () => {
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -559,34 +390,12 @@ test('result events from the reader stop the typing indicator', async () => {
 });
 
 test('plain text is injected with the Telegram user prefix and echo-suppressed', async () => {
-  let textHandler = null;
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => {
-      if (evt === 'text') textHandler = handler;
-    },
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async () => {},
-      sendMessage: async () => {}
-    }
-  };
+  const mockBot = makeBotMock();
 
   const sentKeys = [];
-  const mockTmux = {
-    getSessionOption: async () => null,
+  const mockTmux = makeTmuxMock({
     sendKeys: async (session, keys, enter) => { sentKeys.push({ session, keys, enter }); }
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  });
 
   const sentMessages = [];
   mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
@@ -599,7 +408,7 @@ test('plain text is injected with the Telegram user prefix and echo-suppressed',
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -608,7 +417,7 @@ test('plain text is injected with the Telegram user prefix and echo-suppressed',
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
   // Telegram text is injected with the prefix and starts typing
-  await textHandler({ chat: { id: 12345 }, message: { text: 'Hello bot' }, reply: async () => {} });
+  await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'Hello bot' }, reply: async () => {} });
 
   assert.equal(sentKeys.length, 1);
   assert.equal(sentKeys[0].keys, 'Telegram user: Hello bot');
@@ -628,40 +437,19 @@ test('plain text is injected with the Telegram user prefix and echo-suppressed',
 });
 
 test('unmapped slash commands are injected without the Telegram user prefix', async () => {
-  let textHandler = null;
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => {
-      if (evt === 'text') textHandler = handler;
-    },
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async () => {}
-    }
-  };
+  const mockBot = makeBotMock();
 
   const sentKeys = [];
-  const mockTmux = {
-    getSessionOption: async () => null,
+  const mockTmux = makeTmuxMock({
     sendKeys: async (session, keys, enter) => { sentKeys.push({ session, keys, enter }); }
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  });
 
   class MockReader {
     start() {}
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -670,7 +458,7 @@ test('unmapped slash commands are injected without the Telegram user prefix', as
   // No refreshSkills call: commandMapping stays empty, so /doctor is an unmapped passthrough
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
-  await textHandler({ chat: { id: 12345 }, message: { text: '/doctor' }, reply: async () => {} });
+  await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: '/doctor' }, reply: async () => {} });
 
   assert.equal(sentKeys.length, 1);
   assert.equal(sentKeys[0].keys, '/doctor');
@@ -679,24 +467,13 @@ test('unmapped slash commands are injected without the Telegram user prefix', as
 });
 
 test('proj_connect swaps the active session and leaves the old one running', async () => {
-  let connectHandler = null;
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: (regex, handler) => {
-      if (regex.toString().includes('proj_connect')) connectHandler = handler;
-    },
-    telegram: { setMyCommands: async () => {} }
-  };
+  const mockBot = makeBotMock();
 
   const killed = [];
-  const mockTmux = {
-    hasSession: async () => true,
-    getSessionOption: async () => null,
+  const mockTmux = makeTmuxMock({
     sendKeys: async () => {},
     killSession: async (name) => { killed.push(name); }
-  };
+  });
 
   const mockProjectManager = {
     listProjects: async () => [
@@ -706,14 +483,6 @@ test('proj_connect swaps the active session and leaves the old one running', asy
     findProjectBySession: async () => null
   };
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
   const readers = [];
   class MockReader {
     constructor() { this.startCalls = []; this.stopCalls = 0; readers.push(this); }
@@ -721,7 +490,7 @@ test('proj_connect swaps the active session and leaves the old one running', asy
     stop() { this.stopCalls++; }
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     projectManager: mockProjectManager,
@@ -732,6 +501,7 @@ test('proj_connect swaps the active session and leaves the old one running', asy
   await botInstance.switchActiveSession('claude-alpha', 111, '/tmp/alpha');
   assert.equal(readers.length, 1);
 
+  const connectHandler = actionHandler(mockBot, 'proj_connect');
   assert.ok(connectHandler, 'proj_connect action handler registered');
   const replies = [];
   const mockCtx = {
@@ -758,36 +528,19 @@ test('proj_connect swaps the active session and leaves the old one running', asy
 });
 
 test('proj_connect answers Session not running when the session died before the tap', async () => {
-  let connectHandler = null;
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: (regex, handler) => {
-      if (regex.toString().includes('proj_connect')) connectHandler = handler;
-    },
-    telegram: { setMyCommands: async () => {} }
-  };
-
-  const mockTmux = { hasSession: async () => false };
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock({ hasSession: async () => false });
   const mockProjectManager = {
     listProjects: async () => [{ name: 'beta', path: '/tmp/beta', runningSessions: ['claude-beta'] }]
   };
 
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
-
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     projectManager: mockProjectManager
   });
 
+  const connectHandler = actionHandler(mockBot, 'proj_connect');
   const cbAnswers = [];
   await connectHandler({
     match: ['proj_connect:beta', 'beta'],
@@ -803,13 +556,7 @@ test('proj_connect answers Session not running when the session died before the 
 });
 
 test('attachExistingSession attaches only when exactly one claude session runs', async () => {
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: { setMyCommands: async () => {} }
-  };
+  const mockBot = makeBotMock();
 
   const readers = [];
   class MockReader {
@@ -818,24 +565,14 @@ test('attachExistingSession attaches only when exactly one claude session runs',
     stop() {}
   }
 
-  const makeTmux = (sessions) => ({
-    listSessions: async () => sessions,
-    getSessionOption: async () => null
-  });
   const mockProjectManager = {
     findProjectBySession: async () => ({ name: 'solo', path: '/tmp/solo' })
   };
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const config = defaultTestConfig({ allowedUserIds: ['111'] });
 
   const one = createBot(config, {
     bot: mockBot,
-    tmux: makeTmux(['claude-solo']),
+    tmux: makeTmuxMock({ listSessions: async () => ['claude-solo'] }),
     projectManager: mockProjectManager,
     sessionReaderClass: MockReader
   });
@@ -844,7 +581,7 @@ test('attachExistingSession attaches only when exactly one claude session runs',
 
   const two = createBot(config, {
     bot: mockBot,
-    tmux: makeTmux(['claude-a', 'claude-b']),
+    tmux: makeTmuxMock({ listSessions: async () => ['claude-a', 'claude-b'] }),
     projectManager: mockProjectManager,
     sessionReaderClass: MockReader
   });
@@ -854,7 +591,7 @@ test('attachExistingSession attaches only when exactly one claude session runs',
 
   const zero = createBot(config, {
     bot: mockBot,
-    tmux: makeTmux([]),
+    tmux: makeTmuxMock({ listSessions: async () => [] }),
     projectManager: mockProjectManager,
     sessionReaderClass: MockReader
   });
@@ -863,34 +600,15 @@ test('attachExistingSession attaches only when exactly one claude session runs',
 });
 
 test('incoming text to a dead session clears the connection and reports the ended session', async () => {
-  let textHandler = null;
   const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => { if (evt === 'text') textHandler = handler; },
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async () => {},
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
+  const mockBot = makeBotMock();
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
 
   const sentKeys = [];
-  const mockTmux = {
+  const mockTmux = makeTmuxMock({
     hasSession: async () => false, // the connected tmux session died
-    getSessionOption: async () => null,
     sendKeys: async (session, keys, enter) => { sentKeys.push({ session, keys, enter }); }
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  });
 
   const readers = [];
   class MockReader {
@@ -899,7 +617,7 @@ test('incoming text to a dead session clears the connection and reports the ende
     stop() { this.stopCalls++; }
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -908,7 +626,7 @@ test('incoming text to a dead session clears the connection and reports the ende
 
   // notifySessionDeath sends the notice via bot.telegram.sendMessage
   // (sendWithFallback), not ctx.reply — both reach the same chat.
-  await textHandler({ chat: { id: 12345 }, message: { text: 'hello' }, reply: async () => {} });
+  await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'hello' }, reply: async () => {} });
 
   assert.equal(sentKeys.length, 0, 'no injection into a dead session');
   assert.ok(
@@ -922,35 +640,9 @@ test('incoming text to a dead session clears the connection and reports the ende
 });
 
 test('typing starts on qa answer, skill_run_now, and skill args completion', async () => {
-  const handlers = {};
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => { if (evt === 'text') handlers.text = handler; },
-    command: () => {},
-    action: (regex, handler) => {
-      const key = regex.toString();
-      if (key.includes('qa:')) handlers.answerQ = handler;
-      if (key.includes('skill_run_now')) handlers.skillRunNow = handler;
-      if (key.includes('skill_run_args')) handlers.skillRunArgs = handler;
-    },
-    telegram: { setMyCommands: async () => {}, sendMessage: async () => {}, sendChatAction: async () => {} }
-  };
+  const mockBot = makeBotMock();
 
-  const mockTmux = {
-    hasSession: async () => true,
-    getSessionOption: async () => null,
-    capturePane: async () => '❯ normal terminal output',
-    sendKeys: async () => {},
-    sendKeysWithDelay: async () => {}
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const mockTmux = makeTmuxMock();
 
   let readerOnEvent = null;
   class MockReader {
@@ -958,7 +650,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -969,6 +661,9 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
   const skills = await botInstance.refreshSkills();
   assert.ok(skills.length > 0, 'expected at least one skill/command to be discovered');
   const skill = skills[0];
+  const answerQ = actionHandler(mockBot, 'qa:');
+  const skillRunNow = actionHandler(mockBot, 'skill_run_now');
+  const skillRunArgs = actionHandler(mockBot, 'skill_run_args');
 
   // Arm the question card, then answer via the qa action (single-choice tap
   // submits immediately and must start typing).
@@ -976,7 +671,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
     type: 'question',
     content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
   });
-  await handlers.answerQ({
+  await answerQ({
     match: ['qa:0:1', '0', '1'],
     chat: { id: 12345 },
     answerCbQuery: async () => {},
@@ -986,7 +681,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
   await readerOnEvent({ type: 'result' }); // stop typing for the next case
 
   // skill_run_now path
-  await handlers.skillRunNow({
+  await skillRunNow({
     match: [`skill_run_now:${skill.hash}`, skill.hash],
     chat: { id: 12345 },
     answerCbQuery: async () => {},
@@ -996,50 +691,24 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
   await readerOnEvent({ type: 'result' });
 
   // skill args completion path (skill_run_args arms it, the next text completes it)
-  await handlers.skillRunArgs({
+  await skillRunArgs({
     match: [`skill_run_args:${skill.hash}`, skill.hash],
     chat: { id: 12345 },
     answerCbQuery: async () => {},
     reply: async () => {}
   });
-  await handlers.text({ chat: { id: 12345 }, message: { text: 'extra args' }, reply: async () => {} });
+  await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'extra args' }, reply: async () => {} });
   assert.equal(botInstance.getActiveState().typingActive, true, 'args completion must start typing');
 
   botInstance.stop();
 });
 
 test('startTyping rebinds to a new chat id instead of staying silent', async () => {
-  const handlers = {};
   const chatActions = [];
-  const mockBot = {
-    use: () => {},
-    on: (evt, handler) => { if (evt === 'text') handlers.text = handler; },
-    command: () => {},
-    action: (regex, handler) => {
-      if (regex.toString().includes('qa:')) handlers.answerQ = handler;
-    },
-    telegram: {
-      setMyCommands: async () => {},
-      sendMessage: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); }
-    }
-  };
+  const mockBot = makeBotMock();
+  mockBot.telegram.sendChatAction = async (chatId, action) => { chatActions.push({ chatId, action }); };
 
-  const mockTmux = {
-    hasSession: async () => true,
-    getSessionOption: async () => null,
-    capturePane: async () => '❯ normal terminal output',
-    sendKeys: async () => {},
-    sendKeysWithDelay: async () => {}
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const mockTmux = makeTmuxMock();
 
   class MockReader {
     start(projectPath, onEvent) { this.onEvent = onEvent; }
@@ -1047,7 +716,7 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   }
   let mockReader = null;
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: function() {
@@ -1058,7 +727,7 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   await botInstance.switchActiveSession('claude-test', 111, '/tmp/proj');
 
   // Typing already active for chat 111 (text injection starts it)
-  await handlers.text({ chat: { id: 111 }, message: { text: 'hello' }, reply: async () => {} });
+  await mockBot.handlers.on.text({ chat: { id: 111 }, message: { text: 'hello' }, reply: async () => {} });
   assert.equal(botInstance.getActiveState().typingActive, true);
 
   // Arm a single-choice question card, then answer from a different chat:
@@ -1067,7 +736,8 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
     type: 'question',
     content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
   });
-  await handlers.answerQ({
+  const answerQ = actionHandler(mockBot, 'qa:');
+  await answerQ({
     match: ['qa:0:1', '0', '1'],
     chat: { id: 222 },
     answerCbQuery: async () => {},
@@ -1084,31 +754,12 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
 
   const chatActions = [];
   const sentMessages = [];
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: {
-      setMyCommands: async () => {},
-      sendChatAction: async (chatId, action) => { chatActions.push({ chatId, action }); },
-      sendMessage: async (chatId, text) => { sentMessages.push({ chatId, text }); }
-    }
-  };
+  const mockBot = makeBotMock();
+  mockBot.telegram.sendChatAction = async (chatId, action) => { chatActions.push({ chatId, action }); };
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
 
   let alive = true;
-  const mockTmux = {
-    hasSession: async () => alive,
-    getSessionOption: async () => null
-  };
-
-  const config = {
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  };
+  const mockTmux = makeTmuxMock({ hasSession: async () => alive });
 
   let readerOnEvent = null;
   class MockReader {
@@ -1116,7 +767,7 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
     stop() {}
   }
 
-  const botInstance = createBot(config, {
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -1147,20 +798,7 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
 });
 
 test('bridge startup generates the hook settings file next to the hook script', async () => {
-  const mockBot = {
-    use: () => {},
-    on: () => {},
-    command: () => {},
-    action: () => {},
-    telegram: { setMyCommands: async () => {}, sendMessage: async () => {}, sendChatAction: async () => {} }
-  };
-  createBot({
-    botToken: '123456:TEST_TOKEN',
-    allowedUserIds: ['111'],
-    projectsDir: process.cwd(),
-    tmuxPath: 'tmux',
-    pollIntervalMs: 1000
-  }, { bot: mockBot });
+  createBot(defaultTestConfig({ allowedUserIds: ['111'] }), { bot: makeBotMock() });
 
   const bridgeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const settingsPath = path.join(bridgeRoot, 'hooks', 'claude-bridge-settings.generated.json');
