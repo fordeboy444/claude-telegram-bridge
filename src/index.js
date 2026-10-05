@@ -324,11 +324,24 @@ export function createBot(config, deps = {}) {
     await ctx.answerCbQuery();
   });
 
-  bot.action(/skill_run_now:([0-9a-f]{8,12})/, async (ctx) => {
+  // Action handlers must never leave the inline button spinning: answer the
+  // callback and report the error even when a tmux/Telegram call throws.
+  async function runActionHandler(ctx, handler) {
+    try {
+      await handler(ctx);
+    } catch (err) {
+      console.warn('⚠️ action failed:', err.message);
+      await ctx.answerCbQuery('Action failed').catch(() => {});
+      await ctx.reply(`⚠️ Action failed: ${err.message}`).catch(() => {});
+    }
+  }
+
+  bot.action(/skill_run_now:([0-9a-f]{8,12})/, (ctx) => runActionHandler(ctx, async (ctx) => {
     const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
     if (!activeSessionName) {
+      await ctx.answerCbQuery().catch(() => {});
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
 
@@ -336,9 +349,9 @@ export function createBot(config, deps = {}) {
     await tmux.sendKeys(activeSessionName, skill.command, true);
     await ctx.answerCbQuery(`Running ${skill.name}...`);
     await ctx.reply(`⚡ Injected \`${skill.command}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
-  });
+  }));
 
-  bot.action(/skill_run_args:([0-9a-f]{8,12})/, async (ctx) => {
+  bot.action(/skill_run_args:([0-9a-f]{8,12})/, (ctx) => runActionHandler(ctx, async (ctx) => {
     const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
@@ -348,13 +361,14 @@ export function createBot(config, deps = {}) {
       `✏️ Please reply with the arguments you want to pass to \`${skill.command}\` (or type /cancel):`,
       { parse_mode: 'Markdown' }
     );
-  });
+  }));
 
-  bot.action(/skill_choice:([0-9a-f]{8,12}):(\w+)/, async (ctx) => {
+  bot.action(/skill_choice:([0-9a-f]{8,12}):(\w+)/, (ctx) => runActionHandler(ctx, async (ctx) => {
     const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
     if (!activeSessionName) {
+      await ctx.answerCbQuery().catch(() => {});
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
 
@@ -363,7 +377,7 @@ export function createBot(config, deps = {}) {
     await tmux.sendKeys(activeSessionName, fullCmd, true);
     await ctx.answerCbQuery(`Running ${fullCmd}...`);
     await ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
-  });
+  }));
 
   bot.action('projects_list', async (ctx) => {
     const projects = await projectManager.listProjects();
@@ -383,7 +397,7 @@ export function createBot(config, deps = {}) {
     await ctx.answerCbQuery();
   });
 
-  bot.action(/proj_start:(.+)/, async (ctx) => {
+  bot.action(/proj_start:(.+)/, (ctx) => runActionHandler(ctx, async (ctx) => {
     const projectName = ctx.match[1];
     await ctx.answerCbQuery('Starting fresh session...');
     const projects = await projectManager.listProjects();
@@ -404,7 +418,7 @@ export function createBot(config, deps = {}) {
       `🚀 *Fresh session started!*\nFocused on: \`${sessionName}\`\nSend any text message to interact.`,
       { parse_mode: 'Markdown' }
     );
-  });
+  }));
 
   bot.action(/proj_connect:(.+)/, async (ctx) => {
     const projectName = ctx.match[1];
