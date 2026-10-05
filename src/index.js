@@ -113,7 +113,7 @@ export function createBot(config, deps = {}) {
       { command: 'skills', description: 'Browse and run Claude skills' },
       { command: 'status', description: 'View current active session' },
       { command: 'interrupt', description: 'Stop the running Claude task' },
-      { command: 'diag', description: 'Bridge health: sessions & skill sources' },
+      { command: 'project-resources', description: 'Project resources: skills & plugins' },
       { command: 'help', description: 'Help & usage guide' }
     ];
 
@@ -274,7 +274,7 @@ export function createBot(config, deps = {}) {
       '• /skills - Browse and run Claude skills\n' +
       '• /status - View current active session\n' +
       '• /interrupt - Stop the running Claude task\n' +
-      '• /diag - Bridge health: sessions & skill sources\n' +
+      '• /project-resources - Project skills & plugin resources\n' +
       '• /help - Help & usage guide\n\n' +
       'Any text you send here will be forwarded directly to your active Claude Code session.',
       { parse_mode: 'Markdown' }
@@ -288,6 +288,7 @@ export function createBot(config, deps = {}) {
       '• Use /skills to browse built-in commands and installed skills.\n' +
       '• Use /status to check if a session is running.\n' +
       '• Use /interrupt to stop the running Claude task.\n' +
+      '• Use /project-resources to view the project\'s skills and plugins.\n' +
       '• Send any regular message to pass keystrokes to the active terminal.',
       { parse_mode: 'Markdown' }
     );
@@ -365,9 +366,11 @@ export function createBot(config, deps = {}) {
     await ctx.reply(menu.text, { parse_mode: 'Markdown', reply_markup: menu.reply_markup });
   });
 
-  // Bridge health check. Named /diag to avoid clobbering the built-in
-  // claude CLI passthrough /doctor (typed commands map to tmux injection).
-  bot.command('diag', async (ctx) => {
+  // Project resources card. Named /project-resources; typed commands map to
+  // tmux injection, so this slash form keeps it out of the pane (like /doctor).
+  // /diag stays as a hidden legacy alias; it is not synced to the Telegram
+  // command menu.
+  async function handleProjectResources(ctx) {
     await refreshSkills();
     const diag = await gatherDiagnostics({
       cwd: process.cwd(),
@@ -378,7 +381,9 @@ export function createBot(config, deps = {}) {
       tmux
     });
     await ctx.reply(formatDiagnosticsMessage(diag), { parse_mode: 'Markdown' });
-  });
+  }
+  bot.command('project-resources', handleProjectResources);
+  bot.command('diag', handleProjectResources);
 
   // Callback Queries
   bot.action(/skills_page:(\d+)/, async (ctx) => {
