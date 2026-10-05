@@ -8,9 +8,9 @@ It gives you full bidirectional terminal interaction on your smartphone: send pr
 
 ## 🎯 What You Get
 
-- 🔄 **Live Terminal Mirroring:** Read Claude Code's responses as they appear in the terminal, automatically cleaned of messy ANSI codes, debounced, and neatly formatted.
+- 🔄 **Live Terminal Mirroring:** Read Claude Code's responses as they appear in the terminal, streamed back as clean Markdown text.
 - 📱 **Remote Control Anywhere:** Send instructions, questions, and replies from Telegram directly into Claude's prompt.
-- 🛠️ **Interactive Skills Browser:** Browse, inspect, and trigger built-in commands (`/clear`, `/compact`, `/doctor`, `/help`) and custom skills with single taps or argument prompts.
+- 🛠️ **Interactive Skills Browser:** Browse, inspect, and trigger built-in commands (`/clear`, `/compact`, `/model`, `/effort`) and custom skills with single taps or argument prompts.
 - 📁 **Project Workspace Dashboard:** View project directories, inspect active sessions, launch fresh sessions, or terminate them with clean status badges (🟢 running / ⚪ idle).
 - 🛡️ **Whitelist Security:** Only authorized Telegram user IDs can interact with your machine; unauthorized messages are dropped silently.
 
@@ -28,7 +28,7 @@ It gives you full bidirectional terminal interaction on your smartphone: send pr
    ├── ⌨️ User Message Handler -> tmux send-keys
    ├── 🛠️ Skills Scanner & Paginated Menu Generator
    ├── 📁 Project Manager (discover & start sessions)
-   └── 🔄 Output Monitor (tmux capture-pane -> clean ANSI -> debounce -> chunk)
+   └── 🔄 Transcript Reader (ClaudeSessionReader — polls Claude's session .jsonl -> sends responses)
         │
         │  [ Native child_process ]
         ▼
@@ -55,7 +55,7 @@ It gives you full bidirectional terminal interaction on your smartphone: send pr
 
 ```bash
 git clone <repo-url>
-cd claude-code-telegram/claude-telegram-bridge
+cd claude-code-telegram-coolify
 npm install
 ```
 
@@ -103,7 +103,7 @@ Open your Telegram bot and send `/start`!
 | `ALLOWED_USER_IDS` | **Yes** | — | Comma-separated list of numeric Telegram User IDs authorized to use the bot. |
 | `PROJECTS_DIR` | No | `process.cwd()` | Root directory containing your project folders. |
 | `TMUX_PATH` | No | `tmux` | Path to `tmux` executable on your system. |
-| `POLL_INTERVAL_MS` | No | `1000` | Terminal pane capture polling frequency in milliseconds. |
+| `POLL_INTERVAL_MS` | No | `1000` | Transcript polling frequency in milliseconds. |
 
 ---
 
@@ -135,7 +135,7 @@ After=network.target
 [Service]
 Type=simple
 User=your-username
-WorkingDirectory=/home/your-username/claude-code-telegram/claude-telegram-bridge
+WorkingDirectory=/home/your-username/claude-code-telegram-coolify
 ExecStart=/usr/bin/node src/index.js
 Restart=always
 RestartSec=5
