@@ -25,15 +25,6 @@ export function getDefaultOrcaDataPath() {
  */
 export async function readOrcaProjects(filePath = getDefaultOrcaDataPath()) {
   try {
-    // If using default path and file doesn't exist, return [] immediately so directory fallback works cleanly
-    if (filePath === getDefaultOrcaDataPath()) {
-      try {
-        await fs.access(filePath);
-      } catch {
-        return [];
-      }
-    }
-
     const content = await fs.readFile(filePath, 'utf8');
     const data = JSON.parse(content);
 
