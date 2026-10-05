@@ -29,8 +29,12 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Quick Tasks Completed
 
-| Date | Quick ID | Task | Status |
-|------|----------|------|--------|
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 261005-mws | /status enriched: sub-agents, runtime, tokens, model, uptime | 2026-10-05 | 82c96c2 | — | .planning/quick/261005-mws-status-enriched-show-sub-agents-running-sidechain-records-f |
+| 261005-mwt | /interrupt command: one Escape to the active tmux session | 2026-10-05 | b2b503b | — | .planning/quick/261005-mwt-interrupt-command-inject-an-interrupt-into-the-running-tmux |
+| 261005-mwu | /skills: include local project skills and local plugins in the skills browser | 2026-10-05 | a5a7cb1 | — | .planning/quick/261005-mwu-skills-include-local-project-skills-and-local-plugins-in-th |
+| 261005-mwv | Mirror Telegram-side messages into the Orca transcript (Branch B close-out, no code change) | 2026-10-05 | b2b503b | — | .planning/quick/261005-mwv-mirror-telegram-side-messages-into-the-orca-transcript-so-or |
 
 ## Accumulated Context
 
