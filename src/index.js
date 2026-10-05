@@ -721,6 +721,12 @@ export function createBot(config, deps = {}) {
           return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
         }
         if (!(await ensureSessionAlive(ctx))) return;
+        // A bare choice builtin (/effort, /model) means "open the level picker",
+        // not a malformed Claude command; the picker injects the real command on tap.
+        if (!args && Array.isArray(matchedSkill.choices) && matchedSkill.choices.length) {
+          const view = buildSkillInspectView(matchedSkill);
+          return ctx.reply(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
+        }
         const fullCmd = args ? `${matchedSkill.command} ${args}` : matchedSkill.command;
         await tmux.sendKeys(activeSessionName, fullCmd, true);
         return ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
