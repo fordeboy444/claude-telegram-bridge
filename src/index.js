@@ -112,6 +112,7 @@ export function createBot(config, deps = {}) {
       { command: 'projects', description: 'Manage project folders & launch sessions' },
       { command: 'skills', description: 'Browse and run Claude skills' },
       { command: 'status', description: 'View current active session' },
+      { command: 'interrupt', description: 'Stop the running Claude task' },
       { command: 'diag', description: 'Bridge health: sessions & skill sources' },
       { command: 'help', description: 'Help & usage guide' }
     ];
@@ -276,6 +277,7 @@ export function createBot(config, deps = {}) {
       '• /projects - Manage project folders & launch sessions\n' +
       '• /skills - Browse and run Claude skills\n' +
       '• /status - View current active session\n' +
+      '• /interrupt - Stop the running Claude task\n' +
       '• /diag - Bridge health: sessions & skill sources\n' +
       '• /help - Help & usage guide\n\n' +
       'Any text you send here will be forwarded directly to your active Claude Code session.',
@@ -289,6 +291,7 @@ export function createBot(config, deps = {}) {
       '• Use /projects to view project directories and start sessions.\n' +
       '• Use /skills to browse built-in commands and installed skills.\n' +
       '• Use /status to check if a session is running.\n' +
+      '• Use /interrupt to stop the running Claude task.\n' +
       '• Send any regular message to pass keystrokes to the active terminal.',
       { parse_mode: 'Markdown' }
     );
@@ -336,6 +339,22 @@ export function createBot(config, deps = {}) {
       console.warn('⚠️ status gather failed:', err.message);
       return legacyLine('dashboard data unavailable');
     }
+  });
+
+  // Interrupt the running task by pressing Escape in the pane (Claude Code has
+  // no /interrupt slash command). Named /interrupt so typing it never reaches
+  // the pane as text, like /diag for /doctor. Send exactly ONE Escape: two
+  // fast presses trigger Claude Code's rewind feature. The send also cancels
+  // an open question modal in the pane, so drop the Telegram card state.
+  bot.command('interrupt', async (ctx) => {
+    if (!activeSessionName) {
+      return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
+    }
+    if (!(await ensureSessionAlive(ctx))) return;
+    await tmux.sendKeysWithDelay(activeSessionName, ['Escape'], 0);
+    activeQuestion = null;
+    stopTyping();
+    return ctx.reply(`🛑 Interrupt sent to \`${activeSessionName}\``, { parse_mode: 'Markdown' });
   });
 
   bot.command('projects', async (ctx) => {

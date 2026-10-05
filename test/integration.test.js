@@ -30,8 +30,9 @@ test('createBot initializes Telegraf instance with middleware, setMyCommands, an
   assert.equal(typeof getActiveState, 'function');
   assert.equal(getActiveState().activeSessionName, null);
   assert.ok(Array.isArray(commandsSet));
-  assert.equal(commandsSet.length, 5);
+  assert.equal(commandsSet.length, 6);
   assert.equal(commandsSet[0].command, 'projects');
+  assert.ok(commandsSet.some(c => c.command === 'interrupt'), 'interrupt in the command menu');
   // Menu must also be registered for private chats, or stale all_private_chats
   // scoped commands from other tools override the default scope menu.
   assert.ok(commandScopes.includes('all_private_chats'), 'commands registered for all_private_chats scope');
