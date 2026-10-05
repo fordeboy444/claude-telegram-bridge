@@ -176,7 +176,6 @@ test('formatQuestionCard supports multiSelect mode with checkboxes and submit bu
   const answers = new Map([[0, new Set([1])]]); // Item 2 selected
   const card = formatQuestionCard(payload, answers);
 
-  assert.ok(card.multiSelect);
   assert.ok(card.text.includes('Multiple Choice'));
   assert.ok(card.text.includes('◻️ *Item 1*'));
   assert.ok(card.text.includes('☑️ *Item 2*'));

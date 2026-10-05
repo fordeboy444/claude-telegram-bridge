@@ -137,9 +137,6 @@ export function formatQuestionCard(questions, answers = new Map()) {
 
   return {
     text: textLines.join('\n'),
-    multiSelect: hasMulti,
-    questionsCount: qs.length,
-    optionsCount: qs[0] ? qs[0].options.length : 0,
     reply_markup: {
       inline_keyboard
     }
