@@ -18,7 +18,7 @@ test('getBuiltInCommands keeps clear+compact and adds model/effort pickers', () 
 
   const effort = builtins.find(c => c.name === 'effort');
   assert.equal(effort.command, '/effort');
-  assert.equal(effort.description, 'Adjust thinking effort');
+  assert.equal(effort.description, 'Adjust thinking effort (fast → smart)');
   assert.deepEqual(effort.choices, ['low', 'medium', 'high', 'xhigh', 'max']);
 });
 

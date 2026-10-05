@@ -9,7 +9,7 @@ export function getBuiltInCommands() {
     { id: 'builtin:clear', name: 'clear', description: 'Clear conversation context and restart clean', command: '/clear' },
     { id: 'builtin:compact', name: 'compact', description: 'Summarize and compress current chat history', command: '/compact' },
     { id: 'builtin:model', name: 'model', description: 'Switch model (fable, opus, sonnet, haiku)', command: '/model', choices: ['fable', 'opus', 'sonnet', 'haiku'] },
-    { id: 'builtin:effort', name: 'effort', description: 'Adjust thinking effort', command: '/effort', choices: ['low', 'medium', 'high', 'xhigh', 'max'] }
+    { id: 'builtin:effort', name: 'effort', description: 'Adjust thinking effort (fast → smart)', command: '/effort', choices: ['low', 'medium', 'high', 'xhigh', 'max'] }
   ];
 }
 
