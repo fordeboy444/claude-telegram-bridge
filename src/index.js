@@ -42,6 +42,10 @@ export function createBot(config, deps = {}) {
   let lastInjectedTime = 0;
   let activeQuestion = null;
   let questionEventCounter = 0;
+  // Bumped on every switchActiveSession: reader callbacks capture their own
+  // epoch and drop events when a newer switch has superseded them, so a
+  // racing old reader can never fire stale events into the new session.
+  let readerEpoch = 0;
 
   function startTyping(chatId) {
     if (!chatId) return;
@@ -175,6 +179,7 @@ export function createBot(config, deps = {}) {
   bot.use(createAuthMiddleware(config.allowedUserIds));
 
   async function switchActiveSession(sessionName, chatId, projectPath) {
+    const myEpoch = ++readerEpoch;
     stopTyping();
     if (activeSessionReader) {
       activeSessionReader.stop();
@@ -204,10 +209,16 @@ export function createBot(config, deps = {}) {
         sessionId = null;
       }
 
+      // A newer switchActiveSession may have run while we resolved the room
+      // option above; abandon this superseded switch so we never overwrite
+      // the newer reader.
+      if (myEpoch !== readerEpoch) return;
+
       activeSessionReader = new SessionReaderClass();
       activeSessionReader.start(
         resolvedProjectPath,
         async (event) => {
+          if (myEpoch !== readerEpoch) return; // superseded by a later switch
           if (!activeChatId) return;
           if (event.type === 'user' && event.content) {
             // If the user prompt came from CLI (not recently sent from Telegram), echo to Telegram
