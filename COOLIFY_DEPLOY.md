@@ -28,5 +28,5 @@ For the full token and user-id walkthrough, see the **Prerequisites** section of
 ## 4. Verification
 After deploying:
 1. Open Telegram and message your bot with `/status`.
-2. Verify that the /project-resources card reports the active session and `tmux` status.
+2. Verify that the /resources card reports the active session and lists project skills and plugins.
 3. Use `/projects` to list workspaces configured in Orca.

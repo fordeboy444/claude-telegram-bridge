@@ -1,5 +1,5 @@
 // claude-telegram-bridge/test/diagnostics.test.js
-// /project-resources command internals: gathering live bridge state and formatting it
+// /resources command internals: gathering live bridge state and formatting it
 // into a readable Telegram message.
 import test from 'node:test';
 import assert from 'node:assert/strict';

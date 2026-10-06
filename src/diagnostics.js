@@ -1,6 +1,6 @@
 // claude-telegram-bridge/src/diagnostics.js
-// Live bridge state for the /project-resources Telegram command (/diag is a
-// hidden alias). Gathers what the bridge can see right now: active session,
+// Live bridge state for the /resources Telegram command. Gathers what the
+// bridge can see right now: active session,
 // tmux sessions, and four name-only skill/plugin buckets.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -19,7 +19,7 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
   const skillSources = [];
   const seen = new Set();
   let totalScannedSkills = 0;
-  // Four name-only buckets for the /project-resources card. Names dedup across
+  // Four name-only buckets for the /resources card. Names dedup across
   // overlapping dirs (cwd and an active worktree can hold the same skill).
   const localSkillNames = new Set();
   const globalSkillNames = new Set();

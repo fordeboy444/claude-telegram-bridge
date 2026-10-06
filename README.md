@@ -116,7 +116,7 @@ Open your Telegram bot and send `/start`!
 | `/skills` | Opens the paginated Skills Browser to inspect details, execute skills, or run with arguments. Includes project (worktree) skills and local plugin installs when a session is active. |
 | `/status` | Displays currently focused project session and online/offline status. |
 | `/interrupt` | Sends one Escape key to the active session. Claude Code stops the current task. |
-| `/project-resources` | Lists the project's skills and plugins — name-only view of local and global skills, local and global plugins. |
+| `/resources` | Lists the project's skills and plugins — name-only view of local and global skills, local and global plugins. |
 | `/help` | Detailed help and button action explanations. |
 | `<any text>` | Sends text directly into Claude Code in the active tmux pane as if typed on your keyboard! |
 | `/cancel` | Aborts a pending "Run with Arguments" prompt. |
