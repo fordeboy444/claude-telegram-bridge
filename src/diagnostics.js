@@ -118,7 +118,7 @@ export async function gatherDiagnostics({ cwd, home, projectsDir, activeSessionN
 }
 
 export function formatDiagnosticsMessage(diag) {
-  const lines = ['🗂️ *Project Resources*', ''];
+  const lines = ['🗂️ *Resources*', ''];
 
   if (diag.activeSession) {
     const status = diag.activeSessionAlive ? '🟢 Online' : '🔴 Terminated';
@@ -126,10 +126,7 @@ export function formatDiagnosticsMessage(diag) {
   } else {
     lines.push('⚪ *No active session.*');
   }
-  lines.push(
-    `🖥️ *tmux claude sessions:* ${diag.tmuxSessions.length ? diag.tmuxSessions.map(s => `\`${projectNameFromSession(s)}\``).join(', ') : 'none'}`,
-    ''
-  );
+  lines.push('');
 
   // Four name-only lists; a section with zero entries is omitted entirely.
   const section = (header, names) => {

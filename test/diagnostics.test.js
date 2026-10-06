@@ -193,7 +193,7 @@ test('formatDiagnosticsMessage renders four name-only lists from gathered state'
   });
   const message = formatDiagnosticsMessage(diag);
 
-  assert.match(message, /🗂️ \*Project Resources\*/);
+  assert.match(message, /🗂️ \*Resources\*/);
   assert.match(message, /`my-app`/); // project name shown, prefix stripped
   assert.ok(!/claude-my-app/.test(message)); // raw session name gone
   assert.match(message, /🟢/); // alive session
@@ -202,6 +202,7 @@ test('formatDiagnosticsMessage renders four name-only lists from gathered state'
   assert.match(message, /🧩 \*Local plugins:\*\n• bridge:deploy-skill/);
   assert.match(message, /🧩 \*Global plugins:\*\n• superpowers:review-skill/);
   assert.ok(!message.includes('.claude')); // no paths in the card
+  assert.ok(!message.includes('tmux claude sessions')); // sessions row removed
   assert.ok(!/scanned/.test(message)); // no totals row
   assert.ok(!message.includes('undefined'));
 
