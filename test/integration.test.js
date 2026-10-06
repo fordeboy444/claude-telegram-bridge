@@ -33,13 +33,12 @@ test('createBot initializes Telegraf instance with middleware, setMyCommands, an
   assert.equal(commandsSet.length, 6);
   assert.equal(commandsSet[0].command, 'projects');
   assert.ok(commandsSet.some(c => c.command === 'interrupt'), 'interrupt in the command menu');
-  assert.ok(commandsSet.some(c => c.command === 'project-resources'), 'project-resources in the command menu');
-  assert.ok(!commandsSet.some(c => c.command === 'diag'), 'diag is a hidden alias, not in the menu');
-  assert.equal(
-    mockBot.handlers.commands.diag,
-    mockBot.handlers.commands['project-resources'],
-    'diag shares the project-resources handler'
-  );
+  assert.ok(commandsSet.some(c => c.command === 'resources'), 'resources in the command menu');
+  assert.ok(!commandsSet.some(c => c.command === 'diag'), 'removed /diag alias must not be in the command menu');
+  assert.ok(!commandsSet.some(c => c.command === 'project-resources'), 'renamed /project-resources must not appear in the command menu');
+  assert.equal(typeof mockBot.handlers.commands.resources, 'function', 'resources handler registered');
+  assert.equal(mockBot.handlers.commands.diag, undefined, 'hidden /diag alias removed');
+  assert.equal(mockBot.handlers.commands['project-resources'], undefined, 'project-resources registration replaced by resources');
   // Menu must also be registered for private chats, or stale all_private_chats
   // scoped commands from other tools override the default scope menu.
   assert.ok(commandScopes.includes('all_private_chats'), 'commands registered for all_private_chats scope');
