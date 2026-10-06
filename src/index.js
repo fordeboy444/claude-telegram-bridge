@@ -113,7 +113,7 @@ export function createBot(config, deps = {}) {
       { command: 'skills', description: 'Browse and run Claude skills' },
       { command: 'status', description: 'View current active session' },
       { command: 'interrupt', description: 'Stop the running Claude task' },
-      { command: 'project-resources', description: 'Project resources: skills & plugins' },
+      { command: 'resources', description: 'Project skills & plugin resources' },
       { command: 'help', description: 'Help & usage guide' }
     ];
 
@@ -274,7 +274,7 @@ export function createBot(config, deps = {}) {
       '• /skills - Browse and run Claude skills\n' +
       '• /status - View current active session\n' +
       '• /interrupt - Stop the running Claude task\n' +
-      '• /project-resources - Project skills & plugin resources\n' +
+      '• /resources - Project skills & plugin resources\n' +
       '• /help - Help & usage guide\n\n' +
       'Any text you send here will be forwarded directly to your active Claude Code session.',
       { parse_mode: 'Markdown' }
@@ -288,7 +288,7 @@ export function createBot(config, deps = {}) {
       '• Use /skills to browse built-in commands and installed skills.\n' +
       '• Use /status to check if a session is running.\n' +
       '• Use /interrupt to stop the running Claude task.\n' +
-      '• Use /project-resources to view the project\'s skills and plugins.\n' +
+      '• Use /resources to view the project\'s skills and plugins.\n' +
       '• Send any regular message to pass keystrokes to the active terminal.',
       { parse_mode: 'Markdown' }
     );
@@ -340,7 +340,7 @@ export function createBot(config, deps = {}) {
 
   // Interrupt the running task by pressing Escape in the pane (Claude Code has
   // no /interrupt slash command). Named /interrupt so typing it never reaches
-  // the pane as text, like /diag for /doctor. Send exactly ONE Escape: two
+  // the pane as text. Send exactly ONE Escape: two
   // fast presses trigger Claude Code's rewind feature. The send also cancels
   // an open question modal in the pane, so drop the Telegram card state.
   bot.command('interrupt', async (ctx) => {
@@ -366,11 +366,9 @@ export function createBot(config, deps = {}) {
     await ctx.reply(menu.text, { parse_mode: 'Markdown', reply_markup: menu.reply_markup });
   });
 
-  // Project resources card. Named /project-resources; typed commands map to
-  // tmux injection, so this slash form keeps it out of the pane (like /doctor).
-  // /diag stays as a hidden legacy alias; it is not synced to the Telegram
-  // command menu.
-  async function handleProjectResources(ctx) {
+  // Project resources card. Named /resources; typed commands map to tmux
+  // injection, so this slash form keeps it out of the pane (like /doctor).
+  async function handleResources(ctx) {
     await refreshSkills();
     const diag = await gatherDiagnostics({
       cwd: process.cwd(),
@@ -382,8 +380,7 @@ export function createBot(config, deps = {}) {
     });
     await ctx.reply(formatDiagnosticsMessage(diag), { parse_mode: 'Markdown' });
   }
-  bot.command('project-resources', handleProjectResources);
-  bot.command('diag', handleProjectResources);
+  bot.command('resources', handleResources);
 
   // Callback Queries
   bot.action(/skills_page:(\d+)/, async (ctx) => {
