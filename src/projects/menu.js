@@ -1,3 +1,5 @@
+import { projectNameFromSession } from './manager.js';
+
 export function buildProjectsMenu(projects) {
   if (projects.length === 0) {
     return {
@@ -27,7 +29,7 @@ export function buildProjectsMenu(projects) {
 export function buildProjectActionView(project) {
   const isRunning = project.runningSessions && project.runningSessions.length > 0;
   const status = isRunning
-    ? `🟢 Active (Session: ${project.runningSessions[0]})`
+    ? `🟢 Active (Session: ${projectNameFromSession(project.runningSessions[0])})`
     : '⚪ No active current session in this project';
 
   const text = [
