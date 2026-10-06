@@ -270,6 +270,40 @@ test('formatStatusMessage handles a missing transcript and dead sessions', () =>
   });
   assert.match(message, /Terminated/);
   assert.match(message, /Sub-agents:\* none/);
+  // The cold-start hint never makes sense for a terminated session.
+  assert.doesNotMatch(message, /No transcript yet/);
+});
+
+// Post-restart cold start: the bridge re-created the tmux session but Claude
+// has not written the bound transcript yet (created on the first exchange).
+// The card must SAY that instead of silently hiding the Model/Effort/Uptime
+// lines like a lookup failure.
+test('formatStatusMessage shows a no-transcript-yet hint for a live session with no transcript', () => {
+  const message = formatStatusMessage({
+    sessionName: 'claude-Main-Agent',
+    alive: true,
+    status: { transcriptFound: false, sessionStart: null, model: null, effort: null, lastActivityMs: null, running: [], finishedCount: 0, totalCount: 0 }
+  });
+  assert.match(message, /🟢 Online/);
+  assert.match(message, /ℹ️ No transcript yet — send the session a message to start it/);
+  assert.match(message, /Sub-agents:\* none/);
+  // The hint explains the absence; the data lines must stay absent, not faked.
+  assert.doesNotMatch(message, /Model:/);
+  assert.doesNotMatch(message, /Effort:/);
+  assert.doesNotMatch(message, /Uptime:/);
+});
+
+// Adjacent neighbor: a live session WITH a transcript must not show the hint
+// (only the cold-start state explains the missing lines).
+test('formatStatusMessage omits the no-transcript-yet hint when the transcript is found', () => {
+  const now = 1_700_000_000_000;
+  const message = formatStatusMessage({
+    sessionName: 'claude-x',
+    alive: true,
+    status: { transcriptFound: true, sessionStart: now, model: null, lastActivityMs: now, running: [], finishedCount: 0, totalCount: 0 },
+    now
+  });
+  assert.doesNotMatch(message, /No transcript yet/);
 });
 
 test('formatStatusMessage shows the folder name without the claude- prefix', () => {

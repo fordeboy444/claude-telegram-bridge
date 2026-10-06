@@ -414,6 +414,14 @@ function renderStatusLines({ sessionName, alive, status, now, labelMax, maxListe
   const name = sanitizeLabel(displayName || 'unknown');
   lines.push(`🎯 \`${name}\` ${stateMark}`);
 
+  // A live session with no transcript on disk is a cold start, not a lookup
+  // failure: Claude writes the transcript on the first exchange. Say so
+  // instead of silently hiding every data line below. Never shown when the
+  // session is terminated (nothing to message).
+  if (alive && status && status.transcriptFound === false) {
+    lines.push('ℹ️ No transcript yet — send the session a message to start it');
+  }
+
   if (status && status.model) {
     lines.push(`🤖 Model: \`${sanitizeLabel(status.model, 48)}\``);
   }
