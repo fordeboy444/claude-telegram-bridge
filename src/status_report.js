@@ -15,6 +15,8 @@ export const MAX_LISTED_AGENTS = 10;
 // Only the tail of the main transcript is scanned for the current model:
 // transcripts can be many MB, and the first record already gives the start.
 export const TAIL_BYTES = 262_144;
+// Valid /effort levels, mirroring the builtin choices in src/skills/scanner.js.
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const DESC_MAX = 48;
 // Character budget before the agent list gets shortened (Telegram cap 4096).
 const MAX_MESSAGE_CHARS = 3800;
@@ -65,6 +67,66 @@ async function readTailModel(filePath) {
       await handle.close();
     }
     return model;
+  } catch {
+    return null;
+  }
+}
+
+// The current effort is the newest /effort prompt in the tail — same tail
+// logic as readTailModel. A user record matches in two shapes: the
+// command-marker form (args in <command-args>) or the plain prompt form
+// ("/effort <level>" at a line start). Only a whitelisted EFFORT_LEVELS value
+// is accepted; a record with unknown or empty args is ignored and the
+// backwards scan continues, so none found yields null.
+function extractEffortCandidate(text) {
+  const markerName = text.match(/<command-name>\s*\/effort\s*<\/command-name>/i);
+  if (markerName) {
+    const args = text.match(/<command-args>([^<]*)<\/command-args>/);
+    return args ? args[1] : '';
+  }
+  const prompt = text.match(/(?:^|\n)\/effort[ \t]+(\S+)/);
+  return prompt ? prompt[1] : null;
+}
+
+async function readTailEffort(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    const start = Math.max(0, stat.size - TAIL_BYTES);
+    const length = stat.size - start;
+    const handle = await fs.open(filePath, 'r');
+    try {
+      const { buffer } = await handle.read(Buffer.alloc(length), 0, length, start);
+      const lines = buffer.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].trim()) continue;
+        let record;
+        try {
+          record = JSON.parse(lines[i]);
+        } catch {
+          // A line cut at the chunk start fails to parse; keep scanning
+          continue;
+        }
+        if (record.type !== 'user' || !record.message || !record.message.content) continue;
+        let text;
+        if (typeof record.message.content === 'string') {
+          text = record.message.content;
+        } else if (Array.isArray(record.message.content)) {
+          text = record.message.content
+            .filter(b => b.type === 'text')
+            .map(b => b.text)
+            .join('\n');
+        } else {
+          continue;
+        }
+        const candidate = extractEffortCandidate(text);
+        if (candidate === null) continue;
+        const level = String(candidate).trim().toLowerCase();
+        if (EFFORT_LEVELS.includes(level)) return level;
+      }
+    } finally {
+      await handle.close();
+    }
+    return null;
   } catch {
     return null;
   }
@@ -189,6 +251,7 @@ export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, 
     transcriptFound: false,
     sessionStart: null,
     model: null,
+    effort: null,
     lastActivityMs: null,
     running: [],
     finishedCount: 0,
@@ -226,9 +289,10 @@ export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, 
     return { ...empty, running: sub.running, finishedCount: sub.finishedCount, totalCount: sub.totalCount };
   }
 
-  const [sessionStart, model, sub] = await Promise.all([
+  const [sessionStart, model, effort, sub] = await Promise.all([
     readFirstLineTimestamp(transcriptPath),
     readTailModel(transcriptPath),
+    readTailEffort(transcriptPath),
     gatherSubAgents(projectDir, effectiveId, now).catch(
       () => ({ running: [], finishedCount: 0, totalCount: 0 })
     )
@@ -238,6 +302,7 @@ export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, 
     transcriptFound: true,
     sessionStart,
     model,
+    effort,
     lastActivityMs: stat.mtimeMs,
     running: sub.running,
     finishedCount: sub.finishedCount,
@@ -337,6 +402,11 @@ function renderStatusLines({ sessionName, alive, status, now, labelMax, maxListe
 
   if (status && status.model) {
     lines.push(`🤖 Model: \`${sanitizeLabel(status.model, 48)}\``);
+  }
+
+  // Hidden until an /effort level exists in the transcript tail.
+  if (status && status.effort) {
+    lines.push(`🧠 Effort: \`${sanitizeLabel(status.effort, 24)}\``);
   }
 
   const timeParts = [];
