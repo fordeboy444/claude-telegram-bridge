@@ -72,12 +72,15 @@ async function readTailModel(filePath) {
   }
 }
 
-// The current effort is the newest /effort prompt in the tail — same tail
-// logic as readTailModel. A user record matches in two shapes: the
-// command-marker form (args in <command-args>) or the plain prompt form
-// ("/effort <level>" at a line start). Only a whitelisted EFFORT_LEVELS value
-// is accepted; a record with unknown or empty args is ignored and the
-// backwards scan continues, so none found yields null.
+// The current effort is the newest effort signal in the tail — same tail
+// logic as readTailModel. The primary source is the top-level `effort` field
+// that Claude Code writes on each assistant record. That field is the only
+// place the value lands when /effort runs as a picker: the picker leaves
+// <command-args> empty, so a prompt-shape scan alone never finds a level.
+// The command-marker and plain-prompt shapes stay as a fallback for records
+// written before the `effort` field existed. Only a whitelisted EFFORT_LEVELS
+// value is accepted; anything else is ignored and the backwards scan
+// continues, so no match yields null.
 function extractEffortCandidate(text) {
   const markerName = text.match(/<command-name>\s*\/effort\s*<\/command-name>/i);
   if (markerName) {
@@ -86,6 +89,31 @@ function extractEffortCandidate(text) {
   }
   const prompt = text.match(/(?:^|\n)\/effort[ \t]+(\S+)/);
   return prompt ? prompt[1] : null;
+}
+
+// Read the effort of one transcript record. Returns a whitelisted level or
+// null. The top-level `effort` field wins; the prompt shapes are the fallback.
+function readRecordEffort(record) {
+  if (record && typeof record.effort === 'string') {
+    const level = record.effort.trim().toLowerCase();
+    if (EFFORT_LEVELS.includes(level)) return level;
+  }
+  if (!record || record.type !== 'user' || !record.message || !record.message.content) return null;
+  let text;
+  if (typeof record.message.content === 'string') {
+    text = record.message.content;
+  } else if (Array.isArray(record.message.content)) {
+    text = record.message.content
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('\n');
+  } else {
+    return null;
+  }
+  const candidate = extractEffortCandidate(text);
+  if (candidate === null) return null;
+  const level = String(candidate).trim().toLowerCase();
+  return EFFORT_LEVELS.includes(level) ? level : null;
 }
 
 async function readTailEffort(filePath) {
@@ -106,22 +134,8 @@ async function readTailEffort(filePath) {
           // A line cut at the chunk start fails to parse; keep scanning
           continue;
         }
-        if (record.type !== 'user' || !record.message || !record.message.content) continue;
-        let text;
-        if (typeof record.message.content === 'string') {
-          text = record.message.content;
-        } else if (Array.isArray(record.message.content)) {
-          text = record.message.content
-            .filter(b => b.type === 'text')
-            .map(b => b.text)
-            .join('\n');
-        } else {
-          continue;
-        }
-        const candidate = extractEffortCandidate(text);
-        if (candidate === null) continue;
-        const level = String(candidate).trim().toLowerCase();
-        if (EFFORT_LEVELS.includes(level)) return level;
+        const level = readRecordEffort(record);
+        if (level) return level;
       }
     } finally {
       await handle.close();

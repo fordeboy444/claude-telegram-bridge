@@ -384,6 +384,83 @@ test('the last /effort prompt wins, prompt-form text is recognized, and invalid 
   assert.equal(s3.effort, null);
 });
 
+test('effort comes from the top-level record field, so an args-less /effort picker still shows', async () => {
+  // Real Claude Code shape: /effort alone leaves <command-args> empty, and the
+  // level lands only on the top-level `effort` field of the next assistant
+  // record. A prompt-shape scan alone yields null here — that was the bug.
+  const fx = await makeFixture({ sessionId: 'sess-eff-5' });
+  await fx.writeTranscript([
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z', message: { role: 'user', content: 'hello' } },
+    {
+      type: 'assistant',
+      timestamp: '2026-10-05T10:02:00Z',
+      effort: 'high',
+      message: { model: 'glm-5.3:cloud', usage: { input_tokens: 10, output_tokens: 5 } }
+    },
+    {
+      type: 'user',
+      isMeta: true,
+      timestamp: '2026-10-05T10:05:00Z',
+      message: {
+        role: 'user',
+        content: '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args></command-args>'
+      }
+    }
+  ]);
+
+  const status = await gatherSessionStatus({
+    claudeHome: path.join(fx.tmpDir, '.claude'),
+    projectPath: fx.projectPath,
+    sessionId: fx.sessionId,
+    now: 1_700_000_000_000
+  });
+
+  assert.equal(status.effort, 'high', 'empty picker args must not hide the level');
+  assert.equal(status.model, 'glm-5.3:cloud', 'model and effort survive side by side');
+});
+
+test('the newest record wins across both effort sources, and unknown field values are skipped', async () => {
+  // Field on the newest assistant record beats an older marker form.
+  const fx1 = await makeFixture({ sessionId: 'sess-eff-6' });
+  await fx1.writeTranscript([
+    {
+      type: 'user', isMeta: true, timestamp: '2026-10-05T10:00:00Z',
+      message: { role: 'user', content: '<command-name>/effort</command-name>\n<command-args>low</command-args>' }
+    },
+    {
+      type: 'assistant', timestamp: '2026-10-05T10:02:00Z', effort: 'max',
+      message: { model: 'glm-5.3:cloud', usage: { input_tokens: 1, output_tokens: 1 } }
+    }
+  ]);
+  const s1 = await gatherSessionStatus({
+    claudeHome: path.join(fx1.tmpDir, '.claude'),
+    projectPath: fx1.projectPath,
+    sessionId: fx1.sessionId,
+    now: 1_700_000_000_000
+  });
+  assert.equal(s1.effort, 'max', 'newest source wins');
+
+  // A non-whitelisted field value is skipped and an older valid level stands.
+  const fx2 = await makeFixture({ sessionId: 'sess-eff-7' });
+  await fx2.writeTranscript([
+    {
+      type: 'assistant', timestamp: '2026-10-05T10:00:00Z', effort: 'medium',
+      message: { model: 'glm-5.3:cloud', usage: { input_tokens: 1, output_tokens: 1 } }
+    },
+    {
+      type: 'assistant', timestamp: '2026-10-05T10:02:00Z', effort: 'banana',
+      message: { model: 'glm-5.3:cloud', usage: { input_tokens: 1, output_tokens: 1 } }
+    }
+  ]);
+  const s2 = await gatherSessionStatus({
+    claudeHome: path.join(fx2.tmpDir, '.claude'),
+    projectPath: fx2.projectPath,
+    sessionId: fx2.sessionId,
+    now: 1_700_000_000_000
+  });
+  assert.equal(s2.effort, 'medium', 'unknown field value skipped, older valid level wins');
+});
+
 test('formatStatusMessage renders the Effort line directly under the Model line and omits it without a level', () => {
   const now = 1_700_000_000_000;
   const status = {
