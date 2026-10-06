@@ -303,3 +303,114 @@ test('formatting helpers use compact numbers, durations, and sanitized labels', 
   assert.equal(sanitizeLabel('x'.repeat(100)).length, 48);
   assert.ok(sanitizeLabel('y'.repeat(100)).endsWith('…'));
 });
+
+test('gatherSessionStatus reads the current effort level from the transcript tail', async () => {
+  const fx = await makeFixture({ sessionId: 'sess-eff-1' });
+  await fx.writeTranscript([
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z' },
+    { type: 'assistant', timestamp: '2026-10-05T10:02:00Z', message: { model: 'glm-5.3:cloud', usage: { input_tokens: 10, output_tokens: 5 } } },
+    {
+      type: 'user',
+      isMeta: true,
+      timestamp: '2026-10-05T10:05:00Z',
+      message: {
+        role: 'user',
+        content: '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>high</command-args>'
+      }
+    }
+  ]);
+
+  const status = await gatherSessionStatus({
+    claudeHome: path.join(fx.tmpDir, '.claude'),
+    projectPath: fx.projectPath,
+    sessionId: fx.sessionId,
+    now: 1_700_000_000_000
+  });
+
+  assert.equal(status.effort, 'high');
+  assert.equal(status.model, 'glm-5.3:cloud', 'model and effort survive side by side');
+});
+
+test('the last /effort prompt wins, prompt-form text is recognized, and invalid args are skipped', async () => {
+  // Newest valid level wins: banana (last) is skipped, xhigh is taken.
+  const fx1 = await makeFixture({ sessionId: 'sess-eff-2' });
+  await fx1.writeTranscript([
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z', message: { role: 'user', content: '/effort medium' } },
+    {
+      type: 'user', isMeta: true, timestamp: '2026-10-05T10:01:00Z',
+      message: { role: 'user', content: '<command-name>/effort</command-name>\n<command-args>xhigh</command-args>' }
+    },
+    {
+      type: 'user', isMeta: true, timestamp: '2026-10-05T10:02:00Z',
+      message: { role: 'user', content: '<command-name>/effort</command-name>\n<command-args>banana</command-args>' }
+    }
+  ]);
+
+  const s1 = await gatherSessionStatus({
+    claudeHome: path.join(fx1.tmpDir, '.claude'),
+    projectPath: fx1.projectPath,
+    sessionId: fx1.sessionId,
+    now: 1_700_000_000_000
+  });
+  assert.equal(s1.effort, 'xhigh', 'invalid newest args skipped, previous valid level wins');
+
+  // Prompt form recognized without any command markers.
+  const fx2 = await makeFixture({ sessionId: 'sess-eff-3' });
+  await fx2.writeTranscript([
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z', message: { role: 'user', content: '/effort medium' } }
+  ]);
+  const s2 = await gatherSessionStatus({
+    claudeHome: path.join(fx2.tmpDir, '.claude'),
+    projectPath: fx2.projectPath,
+    sessionId: fx2.sessionId,
+    now: 1_700_000_000_000
+  });
+  assert.equal(s2.effort, 'medium');
+
+  // Only invalid args -> no effort at all.
+  const fx3 = await makeFixture({ sessionId: 'sess-eff-4' });
+  await fx3.writeTranscript([
+    {
+      type: 'user', isMeta: true, timestamp: '2026-10-05T10:00:00Z',
+      message: { role: 'user', content: '<command-name>/effort</command-name>\n<command-args>banana</command-args>' }
+    }
+  ]);
+  const s3 = await gatherSessionStatus({
+    claudeHome: path.join(fx3.tmpDir, '.claude'),
+    projectPath: fx3.projectPath,
+    sessionId: fx3.sessionId,
+    now: 1_700_000_000_000
+  });
+  assert.equal(s3.effort, null);
+});
+
+test('formatStatusMessage renders the Effort line directly under the Model line and omits it without a level', () => {
+  const now = 1_700_000_000_000;
+  const status = {
+    transcriptFound: true,
+    sessionStart: now - 3600_000,
+    model: 'glm-5.3:cloud',
+    effort: 'high',
+    lastActivityMs: now - 60_000,
+    running: [],
+    finishedCount: 0,
+    totalCount: 0
+  };
+
+  const message = formatStatusMessage({ sessionName: 'claude-x', alive: true, status, now });
+  assert.match(message, /🧠 Effort:/);
+  const lines = message.split('\n');
+  const modelIdx = lines.findIndex(l => /Model:/.test(l));
+  const effortIdx = lines.findIndex(l => /🧠 Effort:/.test(l));
+  const uptimeIdx = lines.findIndex(l => /Uptime:/.test(l));
+  assert.equal(effortIdx, modelIdx + 1, 'Effort line sits directly under the Model line');
+  assert.ok(effortIdx < uptimeIdx, 'Effort line comes before the Uptime line');
+
+  const withoutEffort = formatStatusMessage({
+    sessionName: 'claude-x',
+    alive: true,
+    status: { ...status, effort: null },
+    now
+  });
+  assert.doesNotMatch(withoutEffort, /Effort:/);
+});
