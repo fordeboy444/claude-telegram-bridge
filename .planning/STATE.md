@@ -42,6 +42,10 @@ Progress: [░░░░░░░░░░] 0%
 | 261005-qng | effort: bare /effort opens the level picker | 2026-10-05 | d6d032b | — | — |
 | 261005-qnb | diag renamed to /project-resources with name-only skill/plugin lists | 2026-10-05 | c2a6af1 | — | — |
 | 261005-qnd | projects: refresh action card after End Session | 2026-10-05 | 54a50fd | — | — |
+| 261006-fgc | /status card: add a thinking-effort line under the Model line, sourced from the last /effort level prompt found in the transcript tail | 2026-10-06 | e413f15 | — | — |
+| 261006-fgd | /project-resources card: remove the "tmux claude sessions" line and retitle the card to "Resources" | 2026-10-06 | e4443c9 | — | — |
+| 261006-fgf | /projects card: strip the claude- prefix from the session name shown in the Status line | 2026-10-06 | 6d5191e | — | — |
+| 261006-fge | /diag renamed to /resources: command /resources replaces /project-resources, the hidden /diag alias is removed, and the command menu, /start text, /help text, README, COOLIFY_DEPLOY.md and tests are updated | 2026-10-06 | 6a8d7e2 | — | — |
 
 ## Accumulated Context
 
