@@ -160,10 +160,15 @@ test('buildProjectActionView renders appropriate buttons based on running status
 
   const runningProj = { name: 'web-backend', path: '/projects/web-backend', runningSessions: ['claude-web-backend'] };
   const runningView = buildProjectActionView(runningProj);
-  assert.ok(runningView.text.includes('Active (Session: claude-web-backend)'));
+  assert.ok(runningView.text.includes('Active (Session: web-backend)'));
+  assert.ok(!runningView.text.includes('claude-'), 'raw tmux session name must not appear in card text');
   const runningButtons = runningView.reply_markup.inline_keyboard.flat();
   assert.ok(runningButtons.some(b => b.text.includes('End Session')));
   assert.ok(!runningButtons.some(b => b.text.includes('Connect')), 'running project must not offer Connect');
+
+  const suffixProj = { name: 'web-backend', path: '/projects/web-backend', runningSessions: ['claude-web-backend-2'] };
+  const suffixView = buildProjectActionView(suffixProj);
+  assert.ok(suffixView.text.includes('Active (Session: web-backend-2)'), 'suffix variants lose only the literal leading claude- prefix');
 });
 
 test('startFreshSession appends --settings pointing at the hook settings file', async () => {
