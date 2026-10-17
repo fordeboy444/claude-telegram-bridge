@@ -69,6 +69,75 @@ export async function findLatestJsonlFile(projectDir) {
   }
 }
 
+// The tools that end a turn with a question for the user.
+const ASK_TOOL_NAMES = new Set(['AskUserQuestion', 'Question']);
+
+// How much of a transcript's tail is scanned for a question Claude is waiting
+// on. Nothing is written after such a question, so it sits at the very end of
+// the file. 1 MB is far more than one turn, and a transcript grows to many
+// megabytes, so the head is never read.
+const OPEN_QUESTION_TAIL_BYTES = 1048576;
+
+/**
+ * The question Claude is waiting on, or null. A question is open until an
+ * answer names its tool_use id, and until no later user turn has taken over:
+ * an interrupted question leaves no answer behind.
+ *
+ * @param {string|null} filePath a transcript
+ * @returns {Promise<{id: string|null, input: object}|null>}
+ */
+export async function findOpenQuestion(filePath) {
+  if (typeof filePath !== 'string' || filePath === '') return null;
+
+  let handle = null;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const { size } = await handle.stat();
+    const length = Math.min(size, OPEN_QUESTION_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+
+    let open = null; // {id, input} of the newest question seen
+    const answered = new Set(); // every tool_use id an answer names
+
+    for (const line of buffer.toString('utf8').split('\n')) {
+      const text = line.trim();
+      if (text === '') continue;
+      let entry;
+      // A tail that starts mid-line is unparseable text, not an error.
+      try {
+        entry = JSON.parse(text);
+      } catch {
+        continue;
+      }
+
+      const content = entry?.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== 'object') continue;
+          if (block.type === 'tool_use' && ASK_TOOL_NAMES.has(block.name)) {
+            open = { id: block.id ?? null, input: block.input || block.arguments || {} };
+          } else if (block.type === 'tool_result' && block.tool_use_id) {
+            answered.add(block.tool_use_id);
+          } else if (block.type === 'text' && entry.type === 'user') {
+            // The user took a new turn, so every question above it is over.
+            open = null;
+          }
+        }
+      } else if (entry?.type === 'tool_use' && ASK_TOOL_NAMES.has(entry.name)) {
+        open = { id: entry.id ?? null, input: entry.input || entry.arguments || {} }; // legacy shape
+      }
+    }
+
+    if (!open) return null;
+    return answered.has(open.id) ? null : open;
+  } catch {
+    return null; // unreadable file: no question to report
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
 export class ClaudeSessionReader {
   constructor(options = {}) {
     this.claudeHome = options.claudeHome || path.join(os.homedir(), '.claude');
@@ -77,6 +146,7 @@ export class ClaudeSessionReader {
     this._pinned = false; // start() pinned this reader to one transcript file
     this.lastFileOffsets = new Map(); // filePath -> byte offset
     this._reading = false; // a poll tick is in flight; hold the next one back
+    this._lastQuestionId = null; // newest question reported, streamed or scanned
     this.pollingTimer = null;
     this._stopped = false;
   }
@@ -166,13 +236,17 @@ export class ClaudeSessionReader {
               for (const block of content) {
                 if (block.type === 'text' && block.text) {
                   events.push({ type: 'text', content: block.text });
-                } else if (block.type === 'tool_use' && (block.name === 'AskUserQuestion' || block.name === 'Question')) {
-                  events.push({ type: 'question', content: block.input || block.arguments });
+                } else if (block.type === 'tool_use' && ASK_TOOL_NAMES.has(block.name)) {
+                  // Remembered so the tail scan does not report this question a
+                  // second time while the user has not answered it yet.
+                  this._lastQuestionId = block.id ?? this._lastQuestionId;
+                  events.push({ type: 'question', content: block.input || block.arguments, id: block.id ?? null });
                 }
               }
             }
-          } else if (entry.type === 'tool_use' && (entry.name === 'AskUserQuestion' || entry.name === 'Question')) {
-            events.push({ type: 'question', content: entry.input || entry.arguments });
+          } else if (entry.type === 'tool_use' && ASK_TOOL_NAMES.has(entry.name)) {
+            this._lastQuestionId = entry.id ?? this._lastQuestionId;
+            events.push({ type: 'question', content: entry.input || entry.arguments, id: entry.id ?? null });
           } else if (entry.type === 'result') {
             // Claude writes one result entry at the end of every turn.
             events.push({ type: 'result', subtype: entry.subtype || null });
@@ -197,6 +271,9 @@ export class ClaudeSessionReader {
 
     let trackedFile = null;
     let tickCount = 0;
+    let questionTicks = 0;
+    // A fresh join reports a question Claude is already waiting on again.
+    this._lastQuestionId = null;
     const getBoundSessionId = options.getBoundSessionId || null;
     const getSessionFile = typeof options.getSessionFile === 'function' ? options.getSessionFile : null;
     // A joined Orca tab pins ONE transcript. Either option being present pins
@@ -289,6 +366,19 @@ export class ClaudeSessionReader {
           const events = await this.readNewEvents(projectPath);
           for (const ev of events) {
             onEvent(ev);
+          }
+
+          // First tick, then every 5th: this reader adopted the transcript at
+          // its current size, so a question Claude is waiting on right now was
+          // written before the join and streams no event. Report it once per
+          // question id. The check runs after the read above, so a question
+          // that just streamed is already known and stays a single card.
+          if (++questionTicks % 5 === 1) {
+            const open = await findOpenQuestion(this.sessionFile);
+            if (open && open.id !== this._lastQuestionId) {
+              this._lastQuestionId = open.id;
+              onEvent({ type: 'question', content: open.input, id: open.id });
+            }
           }
         } catch {
         } finally {

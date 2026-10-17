@@ -58,6 +58,7 @@ export function createBot(config, deps = {}) {
   let commandMapping = new Map();
   let typingTimer = null;
   let typingChatId = null;
+  let typingIdleTicks = 0; // consecutive transport-idle readings while typing
   let lastInjectedPrompt = null;
   let lastInjectedTime = 0;
   let activeQuestion = null;
@@ -128,6 +129,7 @@ export function createBot(config, deps = {}) {
       clearInterval(typingTimer);
     }
     typingChatId = chatId;
+    typingIdleTicks = 0;
     const sendTyping = async () => {
       if (activeTarget) {
         let alive = true;
@@ -139,6 +141,25 @@ export function createBot(config, deps = {}) {
         if (!alive) {
           await notifySessionDeath(chatId);
           return;
+        }
+
+        // A turn can end without text and without a question. Claude Code
+        // 2.1.302 writes no end-of-turn record, so the transport's own state is
+        // the honest signal. Two readings in a row keep a slow start from
+        // stopping the indicator early; null means the transport cannot say.
+        let status = null;
+        try {
+          status = await io.status(activeTarget);
+        } catch {
+          status = null;
+        }
+        if (status === 'idle') {
+          if (++typingIdleTicks >= 2) {
+            stopTyping();
+            return;
+          }
+        } else {
+          typingIdleTicks = 0;
         }
       }
       bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
@@ -154,6 +175,7 @@ export function createBot(config, deps = {}) {
       typingTimer = null;
     }
     typingChatId = null;
+    typingIdleTicks = 0;
   }
 
   // A dead tmux session must never receive injections or keep the typing

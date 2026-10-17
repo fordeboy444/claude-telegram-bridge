@@ -59,6 +59,8 @@ function makeOrcaMock({ records = [], statuses = {}, sendResult, listError = nul
   return {
     calls,
     listError,
+    // Exposed so a test can change a tab's state between poll ticks.
+    statuses,
     async list() {
       if (this.listError) throw this.listError;
       return records;
@@ -247,6 +249,37 @@ test('joining starts the typing indicator when the tab is working', async () => 
   await dispatch(h, 'orca_tab:', ['orca_tab:term_a', 'term_a']);
 
   assert.equal(h.api.getActiveState().typingActive, true);
+
+  h.api.stop();
+});
+
+// Wait until the condition holds, or give up and let the assertion fail with a
+// real message. Same helper as test/session_reader.test.js.
+async function waitFor(predicate, { timeoutMs = 2000, stepMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return false;
+}
+
+test('typing stops when the tab goes idle with nothing left to report', async () => {
+  const statuses = { term_a: { isRunningAgent: true, status: 'working' } };
+  const h = await makeHarness({ records: [tabRecord({ handle: 'term_a' })], statuses });
+
+  await dispatch(h, 'orca_tab:', ['orca_tab:term_a', 'term_a']);
+  assert.equal(h.api.getActiveState().typingActive, true);
+
+  // The turn ends with no text and no question. Nothing on the transcript
+  // stops the indicator, so the tab's own idle state must. Two readings in a
+  // row are required, so this takes two 4s ticks.
+  h.orca.statuses.term_a = { isRunningAgent: true, status: 'idle' };
+
+  assert.ok(
+    await waitFor(() => h.api.getActiveState().typingActive === false, { timeoutMs: 15000 }),
+    'typing must stop on a sustained idle report'
+  );
 
   h.api.stop();
 });

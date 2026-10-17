@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { getProjectSlug, ClaudeSessionReader } from '../src/tmux/session_reader.js';
+import { getProjectSlug, ClaudeSessionReader, findOpenQuestion } from '../src/tmux/session_reader.js';
 
 // Wait until the condition holds, or give up and let the assertion fail with a
 // real message. Fixed sleeps are not enough: under parallel test load the poll
@@ -696,4 +696,117 @@ test('ClaudeSessionReader keeps the current binding when getBoundSessionId fails
 
   assert.equal(reader.sessionId, oldId, 'binding unchanged after read failures');
   assert.ok(received.some(e => e.content === 'Still the old session.'));
+});
+
+// --- A question Claude is already waiting on ---
+//
+// The reader adopts a transcript at its CURRENT size, so a question written
+// before the bridge joined streams no event at all. The tail of the transcript
+// is scanned instead. A question stays open until an answer names it, or until
+// the user takes a later turn.
+
+const askRecord = (id, question) => ({
+  type: 'assistant',
+  message: { content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { question } }] }
+});
+
+const answerRecord = (id) => ({
+  type: 'user',
+  message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'answered' }] }
+});
+
+// One transcript in a fresh temp dir. Returns its path.
+async function writeLines(records) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-open-q-'));
+  const file = path.join(dir, 'session.jsonl');
+  await fs.writeFile(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  return file;
+}
+
+test('findOpenQuestion reports a question that nothing has answered', async () => {
+  const file = await writeLines([askRecord('call_1', 'Which one?')]);
+
+  const open = await findOpenQuestion(file);
+  assert.equal(open.id, 'call_1');
+  assert.deepEqual(open.input, { question: 'Which one?' });
+});
+
+test('findOpenQuestion reports the newest question, not an answered older one', async () => {
+  const file = await writeLines([
+    askRecord('call_1', 'First?'),
+    answerRecord('call_1'),
+    askRecord('call_2', 'Second?')
+  ]);
+
+  assert.equal((await findOpenQuestion(file)).id, 'call_2');
+});
+
+test('findOpenQuestion returns null once the answer is recorded', async () => {
+  const file = await writeLines([askRecord('call_1', 'Which one?'), answerRecord('call_1')]);
+
+  assert.equal(await findOpenQuestion(file), null);
+});
+
+test('findOpenQuestion returns null when the user has since taken a turn', async () => {
+  // An interrupted question leaves no answer behind. The user turn after it is
+  // the signal that it is over.
+  const file = await writeLines([
+    askRecord('call_1', 'Which one?'),
+    { type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }
+  ]);
+
+  assert.equal(await findOpenQuestion(file), null);
+});
+
+test('findOpenQuestion returns null for a transcript with no question', async () => {
+  const file = await writeLines([
+    { type: 'user', message: { content: 'Hello' } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } }
+  ]);
+
+  assert.equal(await findOpenQuestion(file), null);
+});
+
+test('findOpenQuestion returns null for a missing or null file', async () => {
+  assert.equal(await findOpenQuestion('/nonexistent/dir/session.jsonl'), null);
+  assert.equal(await findOpenQuestion(null), null);
+});
+
+test('ClaudeSessionReader emits a question that was already open when it started', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-open-q-run-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-123.jsonl');
+  await fs.writeFile(sessionFile, JSON.stringify(askRecord('call_open', 'Pick one')) + '\n');
+
+  const events = [];
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  reader.start(projectPath, (e) => events.push(e), 20, { sessionFile });
+
+  assert.ok(await waitFor(() => events.some((e) => e.type === 'question')));
+  const asked = events.find((e) => e.type === 'question');
+  assert.equal(asked.id, 'call_open');
+  assert.deepEqual(asked.content, { question: 'Pick one' });
+  reader.stop();
+});
+
+test('ClaudeSessionReader emits an open question once, not on every tick', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-open-q-once-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-123.jsonl');
+  await fs.writeFile(sessionFile, JSON.stringify(askRecord('call_open', 'Pick one')) + '\n');
+
+  const events = [];
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  reader.start(projectPath, (e) => events.push(e), 20, { sessionFile });
+
+  assert.ok(await waitFor(() => events.some((e) => e.type === 'question')));
+  // Long enough for several later scans of the same open question.
+  await new Promise((r) => setTimeout(r, 150));
+  reader.stop();
+
+  assert.equal(events.filter((e) => e.type === 'question').length, 1);
 });

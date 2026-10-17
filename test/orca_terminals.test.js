@@ -229,3 +229,129 @@ test('resolveTranscript derives the project dir from the tab when none is given'
 
   assert.ok((await resolveTranscript(t, { claudeHome })).endsWith('sess.jsonl'));
 });
+
+// --- Linking a tab to its transcript on Claude Code 2.1.302 ---
+//
+// 2.1.302 opens a transcript with a metadata record (type "mode",
+// "last-prompt"), and that record carries no cwd. The first-record probe below
+// therefore links nothing on a modern transcript, and several transcripts in
+// one project dir defeat the lone-file rule. Two other signals link a tab:
+// the session registry, and the ai-title record Claude writes into its own
+// transcript (it equals the Orca tab title).
+
+// A Claude session registry entry: <claudeHome>/sessions/<pid>.json.
+async function writeRegistryEntry(claudeHome, pid, record) {
+  const sessionsDir = path.join(claudeHome, 'sessions');
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.writeFile(path.join(sessionsDir, `${pid}.json`), JSON.stringify(record));
+}
+
+test('resolveTranscript uses the session registry when no first record carries a cwd', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab();
+
+  const mine = await writeTranscript(projectDir, 'aaaa.jsonl', [{ type: 'mode' }], 1000);
+  await writeTranscript(projectDir, 'bbbb.jsonl', [{ type: 'mode' }], 2000);
+  await writeRegistryEntry(claudeHome, 105877, {
+    sessionId: 'aaaa', cwd: t.projectPath, updatedAt: 100
+  });
+
+  assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), mine);
+});
+
+test('resolveTranscript takes the newest registry entry for the tab cwd', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab();
+
+  // The registered session is the OLDER file, so this also proves the registry
+  // beats mtime: a wrong file is worse than no file.
+  await writeTranscript(projectDir, 'old.jsonl', [{ type: 'mode' }], 2000);
+  const mine = await writeTranscript(projectDir, 'new.jsonl', [{ type: 'mode' }], 1000);
+
+  await writeRegistryEntry(claudeHome, 111, { sessionId: 'old', cwd: t.projectPath, updatedAt: 100 });
+  await writeRegistryEntry(claudeHome, 222, { sessionId: 'new', cwd: t.projectPath, updatedAt: 200 });
+  // One session resumed in a second process registers twice; the older
+  // registration must lose.
+  await writeRegistryEntry(claudeHome, 333, { sessionId: 'new', cwd: t.projectPath, updatedAt: 50 });
+
+  assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), mine);
+});
+
+test('resolveTranscript ignores registry entries for another cwd', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab();
+
+  await writeTranscript(projectDir, 'mine.jsonl', [{ type: 'mode' }], 1000);
+  // Newest file, and the only registration: both point away from the tab.
+  await writeTranscript(projectDir, 'other.jsonl', [{ type: 'mode' }], 2000);
+  await writeRegistryEntry(claudeHome, 111, {
+    sessionId: 'other', cwd: '/home/orca/Projects/Other', updatedAt: 999
+  });
+
+  assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), null);
+});
+
+test('resolveTranscript does not pin a registered session file that is gone', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab();
+
+  const only = await writeTranscript(projectDir, 'only.jsonl', [{ type: 'mode' }], 1000);
+  // A stale registration for this cwd whose transcript no longer exists. A pin
+  // to a file that never appears spins forever, which is the bug being fixed.
+  await writeRegistryEntry(claudeHome, 111, {
+    sessionId: 'gone', cwd: t.projectPath, updatedAt: 999
+  });
+
+  assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), only);
+});
+
+test('resolveTranscript prefers the transcript whose last ai-title matches the tab', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab(); // cleanTitle: 'Casual greeting'
+
+  // The tab's own transcript is the OLDER file.
+  const mine = await writeTranscript(projectDir, 'mine.jsonl', [
+    { type: 'mode' },
+    { type: 'ai-title', aiTitle: 'An old title' },
+    { type: 'ai-title', aiTitle: 'Casual greeting' }
+  ], 1000);
+  await writeTranscript(projectDir, 'other.jsonl', [
+    { type: 'mode' },
+    { type: 'ai-title', aiTitle: 'Something else' }
+  ], 2000);
+
+  assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), mine);
+});
+
+test('resolveTranscript prefers an ai-title match over the registry', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab();
+
+  // Two tabs share one project dir. The registry holds the newest session in
+  // that cwd, which is the OTHER tab, so the exact title must win.
+  const mine = await writeTranscript(projectDir, 'mine.jsonl', [
+    { type: 'mode' },
+    { type: 'ai-title', aiTitle: 'Casual greeting' }
+  ], 1000);
+  await writeTranscript(projectDir, 'other.jsonl', [
+    { type: 'mode' },
+    { type: 'ai-title', aiTitle: 'Something else' }
+  ], 2000);
+  await writeRegistryEntry(claudeHome, 222, {
+    sessionId: 'other', cwd: t.projectPath, updatedAt: 999
+  });
+
+  assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), mine);
+});
