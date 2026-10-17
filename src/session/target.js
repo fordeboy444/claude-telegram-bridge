@@ -106,6 +106,13 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
     return fromOrca(await orca.send(target.handle, { text: '', enter: false, interrupt: true }));
   }
 
+  // The visible screen text: a tmux pane, or an Orca tab's terminal tail.
+  // Both transports can show the same Claude question modal.
+  async function readScreen(target, lines = 40) {
+    if (target.kind === 'tmux') return tmux.capturePane(target.sessionName, -lines);
+    return orca.readTail(target.handle);
+  }
+
   // The Claude session id bound to this target, or null. A tmux session keeps
   // it in a session option; an Orca tab reports it through the transcript pin
   // instead, so this layer never invents one.
@@ -142,5 +149,5 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
     }
   }
 
-  return { sendText, sendKeys, interrupt, getBoundSessionId, isAlive, status };
+  return { sendText, sendKeys, interrupt, getBoundSessionId, isAlive, status, readScreen };
 }

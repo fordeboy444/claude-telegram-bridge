@@ -12,6 +12,7 @@ function makeOrcaMock(overrides = {}) {
     calls,
     list: async () => (overrides.terminals ?? [{ handle: 'term_a', connected: true }]),
     agentStatus: async (h) => (overrides.statuses?.[h] ?? { isRunningAgent: true, status: null }),
+    readTail: async (h) => (overrides.tails?.[h] ?? ''),
     send: async (h, p) => {
       calls.push({ handle: h, ...p });
       return { handle: h, accepted: overrides.accepted ?? true, bytesWritten: p.text?.length ?? 0 };
@@ -180,6 +181,28 @@ test('sendKeys refuses a key with no Orca byte instead of guessing one', async (
     { handle: 'term_a', text: '\x1B[B', enter: false, interrupt: false }
   ]);
   assert.deepEqual(result, { accepted: false, bytesWritten: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// readScreen
+// ---------------------------------------------------------------------------
+
+test('readScreen on a tmux target reads the last pane lines', async () => {
+  const reads = [];
+  const tmux = makeTmuxMock({
+    capturePane: async (...args) => { reads.push(args); return '❯ pane text'; }
+  });
+  const io = createSessionIo({ tmux, orca: makeOrcaMock() });
+
+  assert.equal(await io.readScreen(aTmuxTarget()), '❯ pane text');
+  assert.deepEqual(reads, [[SESSION, -40]]);
+});
+
+test('readScreen on an Orca target reads the terminal tail', async () => {
+  const orca = makeOrcaMock({ tails: { term_a: 'Enter to select · Esc to cancel' } });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.readScreen(anOrcaTarget()), 'Enter to select · Esc to cancel');
 });
 
 // ---------------------------------------------------------------------------

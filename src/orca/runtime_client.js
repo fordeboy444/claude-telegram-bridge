@@ -203,6 +203,14 @@ export class OrcaRuntimeClient {
     };
   }
 
+  // The visible text of the terminal (the last screenful). The bridge checks
+  // it to tell whether a question modal is still open on the tab.
+  async readTail(handle) {
+    const result = await this.request('terminal.read', { terminal: handle });
+    const tail = result?.terminal?.tail;
+    return Array.isArray(tail) ? tail.join('\n') : '';
+  }
+
   async send(handle, { text, enter, interrupt } = {}) {
     const params = { terminal: handle };
     if (text !== undefined) params.text = text;

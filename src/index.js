@@ -756,37 +756,33 @@ export function createBot(config, deps = {}) {
     await ctx.reply(`🛑 All sessions for \`${projectName}\` terminated.`, { parse_mode: 'Markdown' });
   });
 
-  // After key playback the question modal should sit on its review screen
-  // ("Submit answers"). Claude Code redraws the modal between keystrokes and
-  // can drop a key, so confirm the submission and drive the modal home.
-  // A tmux pane is verified by its text: Enter on the review screen, Right on
-  // a question page. An Orca tab has no pane to grep, so its own status is the
-  // signal. Returns false when the modal stays open (keys lost or session
-  // dead). Aborts silently if a NEW question appears: a new modal means the
-  // old one already closed.
+  // After key playback the question modal should close. Claude Code redraws
+  // the modal between keystrokes and can drop a key, so confirm the submission
+  // and drive the modal home. Both transports show the same modal text: Enter
+  // on the review screen, Right on a question page. An Orca tab also reports
+  // 'working' when the turn resumes, but a fast model can leave 'working'
+  // before the first poll, so the screen is the durable signal. Returns false
+  // when the modal stays open (keys lost or session dead). Aborts silently if
+  // a NEW question appears: a new modal means the old one already closed.
   async function ensureModalSubmitted(target, counterAtStart) {
     for (let i = 0; i < 6; i++) {
       await new Promise(r => setTimeout(r, 600));
       if (questionEventCounter !== counterAtStart) return true;
 
-      // 'working' means the modal closed and Claude resumed the turn. An
-      // unreadable status answers null, so the loop keeps waiting.
-      if (target.kind === 'orca') {
-        if ((await io.status(target)) === 'working') return true;
-        continue;
-      }
+      // 'working' means the modal closed and Claude resumed the turn.
+      if (target.kind === 'orca' && (await io.status(target)) === 'working') return true;
 
-      let pane = '';
+      let screen = '';
       try {
-        pane = await tmux.capturePane(target.sessionName, -40);
+        screen = await io.readScreen(target);
       } catch {
         return false;
       }
-      if (!pane.trim()) return false;
-      if (/Submit answers/.test(pane)) {
-        await tmux.sendKeysWithDelay(target.sessionName, ['Enter'], 200);
-      } else if (/Esc to cancel/.test(pane)) {
-        await tmux.sendKeysWithDelay(target.sessionName, ['Right'], 200);
+      if (!screen.trim()) return false;
+      if (/Submit answers/.test(screen)) {
+        await io.sendKeys(target, ['Enter'], 200);
+      } else if (/Esc to cancel/.test(screen)) {
+        await io.sendKeys(target, ['Right'], 200);
       } else {
         return true; // modal gone: submitted
       }
@@ -819,7 +815,13 @@ export function createBot(config, deps = {}) {
     startTyping(ctx.chat?.id);
 
     const keys = buildAnswerKeys(question.questions, question.answers);
-    await io.sendKeys(activeTarget, keys, 300);
+    const sent = await io.sendKeys(activeTarget, keys, 300);
+    if (sent.accepted === false) {
+      stopTyping();
+      await ctx.answerCbQuery('Send failed');
+      await ctx.reply('⚠️ The terminal did not accept the answer. Nothing was sent.');
+      return;
+    }
 
     const ok = await ensureModalSubmitted(activeTarget, counterAtStart);
     if (ok) {

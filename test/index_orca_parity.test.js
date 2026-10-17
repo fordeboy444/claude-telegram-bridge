@@ -42,14 +42,16 @@ class ReaderSpy {
 }
 
 // The Orca client seam (deps.orcaClient). `calls` records every terminal.send,
-// `statusCalls` every agentStatus probe: a test can then tell a tab status
-// read from a screen read.
-function makeOrcaMock({ statuses = {}, sendResult } = {}) {
+// `statusCalls` every agentStatus probe, `readCalls` every terminal.read: a
+// test can then tell a tab status read from a screen read.
+function makeOrcaMock({ statuses = {}, sendResult, tails = {} } = {}) {
   const calls = [];
   const statusCalls = [];
+  const readCalls = [];
   return {
     calls,
     statusCalls,
+    readCalls,
     async list() {
       return [{
         handle: HANDLE,
@@ -63,6 +65,10 @@ function makeOrcaMock({ statuses = {}, sendResult } = {}) {
       statusCalls.push(handle);
       return statuses[handle] ?? IDLE;
     },
+    async readTail(handle) {
+      readCalls.push(handle);
+      return tails[handle] ?? '';
+    },
     async send(handle, options) {
       calls.push({ handle, ...options });
       return sendResult ?? { accepted: true, bytesWritten: 12 };
@@ -70,7 +76,7 @@ function makeOrcaMock({ statuses = {}, sendResult } = {}) {
   };
 }
 
-async function makeHarness({ statuses = {}, sendResult } = {}) {
+async function makeHarness({ statuses = {}, sendResult, tails = {} } = {}) {
   // defaultTestConfig() pins claudeHome to the real ~/.claude. A temp dir keeps
   // the /status gather and the skills scan off the developer's own machine.
   const claudeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'orca-parity-'));
@@ -114,7 +120,7 @@ async function makeHarness({ statuses = {}, sendResult } = {}) {
     }
   };
 
-  const orca = makeOrcaMock({ statuses, sendResult });
+  const orca = makeOrcaMock({ statuses, sendResult, tails });
   const readers = [];
   class Spy extends ReaderSpy {
     constructor() {
@@ -242,17 +248,33 @@ test('answering a question on an Orca target sends the answer keys to the tab', 
   h.api.stop();
 });
 
-test('ensureModalSubmitted for an Orca target never reads the screen', async () => {
-  const h = await joinOrcaTab({ statuses: { [HANDLE]: WORKING } });
+test('ensureModalSubmitted for an Orca target reads the tab, never the tmux pane', async () => {
+  const h = await joinOrcaTab({
+    tails: { [HANDLE]: "● User answered Claude's questions:\n  ⎿  · Pick one: → B" }
+  });
 
   await raiseQuestion(h);
   await tapAnswer(h);
 
   assert.equal(h.captured.length, 0, 'capturePane was called for an Orca target');
-  // The count is not the point and the typing loop probes the status too: only
-  // the kind of probe matters, and no screen was read.
-  assert.ok(h.orca.statusCalls.length >= 1, 'the tab status is the only probe');
-  assert.ok(h.orca.statusCalls.every((c) => c === HANDLE));
+  assert.ok(h.orca.readCalls.length >= 1, 'the tab screen must be read');
+  assert.ok(h.orca.readCalls.every((c) => c === HANDLE));
+
+  h.api.stop();
+});
+
+test('ensureModalSubmitted for an Orca target confirms on the screen after a fast turn', async () => {
+  // A fast model returns to idle before the first 600 ms poll, so the status
+  // never shows 'working'. The closed modal on the screen is the proof.
+  const h = await joinOrcaTab({
+    tails: { [HANDLE]: "● User answered Claude's questions:\n  ⎿  · Pick one: → B\n✻ Worked for 1s" }
+  });
+
+  await raiseQuestion(h);
+  await tapAnswer(h);
+
+  assert.match(h.replies.at(-1), /submitted/i);
+  assert.ok(h.orca.statusCalls.length >= 1);
 
   h.api.stop();
 });
