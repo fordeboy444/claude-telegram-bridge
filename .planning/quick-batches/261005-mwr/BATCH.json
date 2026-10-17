@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "batch_id": "261005-mwr",
+  "created_at": "2026-10-05T15:29:43.013Z",
+  "options": {},
+  "base_revision": "534a69a80900aabd68a683ef8237589485a4fdee",
+  "items": [
+    {
+      "quick_id": "261005-mws",
+      "client_id": null,
+      "description": "/status enriched: show sub-agents running (sidechain records from session transcript JSONL), how long each has run, tokens used (input+output from usage field), plus other useful info (current model, session uptime).",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/config.js",
+        "src/tmux/session_reader.js",
+        "src/status_report.js",
+        "src/index.js",
+        "test/config.test.js",
+        "test/status_report.test.js",
+        "test/helpers.js",
+        "test/integration.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "82c96c2",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-mwt",
+      "client_id": null,
+      "description": "/interrupt command: inject an interrupt into the running tmux Claude session to stop the current task.",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/index.js",
+        "test/helpers.js",
+        "test/integration.test.js",
+        "README.md"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 1,
+      "commit": "b2b503b",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-mwu",
+      "client_id": null,
+      "description": "/skills: include local (project) skills and local plugins in the skills browser, not only global + built-in.",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/index.js",
+        "src/skills/scanner.js",
+        "src/skills/menu.js",
+        "src/diagnostics.js",
+        "test/helpers.js",
+        "test/skills_discovery.test.js",
+        "test/skills_scanner.test.js",
+        "test/plugin_skills.test.js",
+        "test/skills_menu.test.js",
+        "test/diagnostics.test.js",
+        "test/integration.test.js",
+        "README.md"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 2,
+      "commit": "a5a7cb1",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261005-mwv",
+      "client_id": null,
+      "description": "Mirror Telegram-side messages into the Orca transcript so Orca shows the full two-way conversation.",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/index.js",
+        "src/tmux/transcript_mirror.js",
+        "test/transcript_mirror.test.js",
+        "test/integration.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 3,
+      "commit": "b2b503b",
+      "failure_reason": null
+    }
+  ]
+}

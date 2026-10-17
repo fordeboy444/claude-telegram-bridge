@@ -1,0 +1,174 @@
+import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { readOrcaProjectsAuto } from './orca_reader.js';
+
+// Bridge repo root (src/projects/manager.js -> ../..). The SessionStart hook
+// script lives in <root>/hooks and is referenced by absolute path, because
+// `claude --settings` resolves hook commands from the file's location.
+const BRIDGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Generate the settings file that binds the SessionStart hook to every
+// bridge-launched session. Idempotent overwrite; returns the path or null.
+export function generateHookSettings(rootDir = BRIDGE_ROOT) {
+  const hooksDir = path.join(rootDir, 'hooks');
+  const hookScript = path.join(hooksDir, 'claude-session-id-sync.sh');
+  const settingsPath = path.join(hooksDir, 'claude-bridge-settings.generated.json');
+  try {
+    fsSync.mkdirSync(hooksDir, { recursive: true });
+    const settings = {
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: 'command', command: hookScript, timeout: 5 }] }
+        ]
+      }
+    };
+    fsSync.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    try { fsSync.chmodSync(hookScript, 0o755); } catch {}
+    return settingsPath;
+  } catch (err) {
+    console.warn('⚠️ Could not generate hook settings file:', err.message);
+    return null;
+  }
+}
+
+// Session naming lives here, in one place: tmux sessions are named
+// `claude-<normalized project>` and prefixed variants append `-<suffix>`
+// (claude-web-2). ProjectManager.normalizeSessionName delegates to normalizeName.
+export function normalizeName(name) {
+  if (!name) return 'default';
+  return name.replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+export function sessionNameFor(projectName) {
+  return `claude-${normalizeName(projectName)}`;
+}
+
+export function projectNameFromSession(sessionName) {
+  return sessionName ? sessionName.replace(/^claude-/, '') : '';
+}
+
+export class ProjectManager {
+  // Windows interop: a bare `claude` is not on the WSL PATH (only claude.exe),
+  // so panes die instantly with "command not found" and the session with them.
+  constructor(projectsDir, tmuxController, deps = {}) {
+    this.projectsDir = projectsDir;
+    this.controller = tmuxController;
+    // Default reader walks the live Orca SQLite store, then the legacy JSON.
+    this.orcaReader = deps.orcaReader || readOrcaProjectsAuto;
+    this.cliExecutable = deps.cliExecutable
+      ?? (String(tmuxController?.tmuxPath || '').includes('wsl') ? 'claude.exe' : 'claude');
+    // String = use as-is; null = launch without --settings; undefined = generate
+    this.hookSettingsPath = deps.hookSettingsPath !== undefined
+      ? deps.hookSettingsPath
+      : generateHookSettings();
+  }
+
+  normalizeSessionName(name) {
+    return normalizeName(name);
+  }
+
+  async listProjects() {
+    try {
+      // 1. Try calling orcaReader
+      let projects = [];
+      try {
+        const orcaItems = await this.orcaReader();
+        if (Array.isArray(orcaItems) && orcaItems.length > 0) {
+          projects = orcaItems.map(item => ({
+            name: item.name,
+            displayName: item.displayName || item.name,
+            path: item.path,
+            kind: item.kind || 'orca',
+            repoIds: item.repoIds || []
+          }));
+        }
+      } catch {}
+
+      // 2. Fallback to reading directories from projectsDir if no orca projects
+      if (projects.length === 0) {
+        try {
+          const entries = await fs.readdir(this.projectsDir, { withFileTypes: true });
+          const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.'));
+          projects = dirs.map(d => ({
+            name: d.name,
+            displayName: d.name,
+            path: path.join(this.projectsDir, d.name),
+            kind: 'directory',
+            // A plain folder is not an Orca project, so it has no repo id.
+            repoIds: []
+          }));
+        } catch {}
+      }
+
+      const activeSessions = await this.controller.listSessions('claude-');
+
+      return projects.map(p => {
+        const sessionPrefix = sessionNameFor(p.name);
+        const running = activeSessions.filter(s => s === sessionPrefix || s.startsWith(`${sessionPrefix}-`));
+        return {
+          name: p.name,
+          displayName: p.displayName || p.name,
+          path: p.path,
+          kind: p.kind,
+          // Repo ids let a caller match a live Orca terminal tab to this
+          // project (by id, never by path string). `[]` means unknown.
+          repoIds: p.repoIds || [],
+          runningSessions: running
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async startFreshSession(projectName, projectPath) {
+    const sessionName = sessionNameFor(projectName);
+    const resolvedPath = projectPath || path.join(this.projectsDir, projectName);
+
+    // tmux `new-session -c <missing dir>` does not fail; it starts the pane in
+    // the caller's cwd (/app). Refuse here so a dead project path is visible.
+    if (!fsSync.existsSync(resolvedPath)) {
+      throw new Error(`Project path not found: ${resolvedPath}`);
+    }
+
+    if (await this.controller.hasSession(sessionName)) {
+      await this.controller.killSession(sessionName);
+    }
+
+    // A fixed session id makes the transcript filename deterministic, so the
+    // bridge can read exactly this session's transcript (no newest-file guessing).
+    const sessionId = randomUUID();
+    const launchCmd = `${this.cliExecutable} --session-id ${sessionId} --permission-mode bypassPermissions`;
+    const command = this.hookSettingsPath
+      ? `${launchCmd} --settings "${this.hookSettingsPath.replace(/"/g, '\\"')}"`
+      : launchCmd;
+    await this.controller.newSession(sessionName, resolvedPath, command);
+    await this.controller.setSessionOption(sessionName, '@claude_session_id', sessionId);
+    return sessionName;
+  }
+
+  async killCurrentSession(projectName) {
+    const sessionName = sessionNameFor(projectName);
+    if (await this.controller.hasSession(sessionName)) {
+      await this.controller.killSession(sessionName);
+    }
+  }
+
+  async killProjectSessions(projectName) {
+    const sessionPrefix = sessionNameFor(projectName);
+    const all = await this.controller.listSessions('claude-');
+    const toKill = all.filter(s => s === sessionPrefix || s.startsWith(`${sessionPrefix}-`));
+    for (const sess of toKill) {
+      await this.controller.killSession(sess);
+    }
+  }
+
+  async findProjectBySession(sessionName) {
+    if (!sessionName) return null;
+    const projects = await this.listProjects();
+    return projects.find(p => (p.runningSessions || []).includes(sessionName)) || null;
+  }
+}

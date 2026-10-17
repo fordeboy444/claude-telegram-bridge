@@ -1,0 +1,151 @@
+// claude-telegram-bridge/test/skills_discovery.test.js
+// Regression net for skills discovery: locks in the contract that local,
+// user and project skill folders are all scanned, deduped, and that the
+// daemon's working directory choice cannot silently hide local skills.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { scanSkills, resolveSkillsDirectories } from '../src/skills/scanner.js';
+import { makeSkill } from './helpers.js';
+
+test('resolveSkillsDirectories includes local, user and project skill dirs', () => {
+  const dirs = resolveSkillsDirectories({
+    cwd: '/bridge',
+    home: '/home/user',
+    projectsDir: '/projects',
+    activeSessionName: 'claude-my-app'
+  });
+
+  assert.deepEqual(dirs, [
+    { dir: path.join('/bridge', '.claude', 'skills'), source: 'local' },
+    { dir: path.join('/home/user', '.claude', 'skills'), source: 'global' },
+    { dir: path.join('/projects', 'my-app', '.claude', 'skills'), source: 'project' }
+  ]);
+});
+
+test('resolveSkillsDirectories omits project dir when no session is active', () => {
+  const dirs = resolveSkillsDirectories({
+    cwd: '/bridge',
+    home: '/home/user',
+    projectsDir: '/projects',
+    activeSessionName: null
+  });
+
+  assert.deepEqual(dirs, [
+    { dir: path.join('/bridge', '.claude', 'skills'), source: 'local' },
+    { dir: path.join('/home/user', '.claude', 'skills'), source: 'global' }
+  ]);
+});
+
+test('resolveSkillsDirectories prefers an explicit projectPath over the name-derived path', () => {
+  // Real Orca worktree paths come from orca-data.json and do not sit under
+  // projectsDir/<session-name>, so the caller passes the true path.
+  const explicitPath = '/worktrees/my-app-feat';
+  const dirs = resolveSkillsDirectories({
+    cwd: '/bridge',
+    home: '/home/user',
+    projectsDir: '/projects',
+    activeSessionName: 'claude-my-app',
+    projectPath: explicitPath
+  });
+
+  assert.deepEqual(dirs, [
+    { dir: path.join('/bridge', '.claude', 'skills'), source: 'local' },
+    { dir: path.join('/home/user', '.claude', 'skills'), source: 'global' },
+    { dir: path.join(explicitPath, '.claude', 'skills'), source: 'project' }
+  ]);
+});
+
+test('scanSkills finds skills from every source directory (local + user + project)', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'discovery-test-'));
+  const localDir = path.join(tmp, 'local');
+  const userDir = path.join(tmp, 'user');
+  const projectDir = path.join(tmp, 'project');
+
+  await makeSkill(localDir, 'local-skill', 'local-skill');
+  await makeSkill(userDir, 'user-skill', 'user-skill');
+  await makeSkill(projectDir, 'project-skill', 'project-skill');
+
+  const skills = await scanSkills([localDir, userDir, projectDir]);
+  const names = skills.map(s => s.name).sort();
+
+  assert.deepEqual(names, ['local-skill', 'project-skill', 'user-skill']);
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('scanSkills dedups identical skill names across directories (first wins)', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dedup-test-'));
+  const firstDir = path.join(tmp, 'first');
+  const secondDir = path.join(tmp, 'second');
+
+  await makeSkill(firstDir, 'shared', 'shared-skill', 'From first dir');
+  await makeSkill(secondDir, 'shared', 'shared-skill', 'From second dir');
+
+  const skills = await scanSkills([firstDir, secondDir]);
+
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].description, 'From first dir');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('scanSkills copies the directory label into each result as source', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'source-test-'));
+  const localDir = path.join(tmp, 'local');
+  const userDir = path.join(tmp, 'user');
+
+  await makeSkill(localDir, 'a', 'local-skill');
+  await makeSkill(userDir, 'b', 'user-skill');
+
+  const skills = await scanSkills([{ dir: localDir, source: 'local' }, { dir: userDir, source: 'global' }]);
+  assert.equal(skills.find(s => s.name === 'local-skill').source, 'local');
+  assert.equal(skills.find(s => s.name === 'user-skill').source, 'global');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('scanSkills follows symlinked skill folders', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'symlink-test-'));
+  const scanDir = path.join(tmp, 'scan');
+  const realSkill = await makeSkill(path.join(tmp, 'real'), 'actual', 'linked-skill');
+  await fs.mkdir(scanDir, { recursive: true });
+
+  try {
+    await fs.symlink(realSkill, path.join(scanDir, 'linked'), 'dir');
+  } catch {
+    // Windows may deny symlink creation without privileges; skip on failure
+    await fs.rm(tmp, { recursive: true, force: true });
+    return;
+  }
+
+  const skills = await scanSkills([scanDir]);
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].name, 'linked-skill');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('scanSkills skips broken symlinks and folders without SKILL.md', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'skip-test-'));
+  const scanDir = path.join(tmp, 'scan');
+  await fs.mkdir(scanDir, { recursive: true });
+  await fs.mkdir(path.join(scanDir, 'no-skill-file'), { recursive: true });
+
+  try {
+    await fs.symlink(path.join(tmp, 'does-not-exist'), path.join(scanDir, 'broken'), 'dir');
+  } catch {
+    // Symlink creation unavailable; still verify plain folder skip
+    const skills = await scanSkills([scanDir]);
+    assert.equal(skills.length, 0);
+    await fs.rm(tmp, { recursive: true, force: true });
+    return;
+  }
+
+  const skills = await scanSkills([scanDir]);
+  assert.equal(skills.length, 0);
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});

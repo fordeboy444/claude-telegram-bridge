@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "batch_id": "261006-fgb",
+  "created_at": "2026-10-06T10:07:35.588Z",
+  "options": {},
+  "base_revision": "9fc25ce75e72c795c8e1d6884d6eb419b7a1b5d2",
+  "items": [
+    {
+      "quick_id": "261006-fgc",
+      "client_id": null,
+      "description": "/status card: add a thinking-effort line under the Model line, sourced from the last /effort level prompt found in the transcript tail",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/status_report.js",
+        "test/status_report.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "e413f15",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261006-fgd",
+      "client_id": null,
+      "description": "/project-resources card: remove the \"tmux claude sessions\" line and retitle the card to \"Resources\"",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/diagnostics.js",
+        "test/diagnostics.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "e4443c9",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261006-fge",
+      "client_id": null,
+      "description": "/diag renamed to /resources: command /resources replaces /project-resources, the hidden /diag alias is removed, and the command menu, /start text, /help text, README, COOLIFY_DEPLOY.md and tests are updated",
+      "status": "complete",
+      "depends_on": [
+        "261006-fgd"
+      ],
+      "planned_files": [
+        "src/index.js",
+        "test/integration.test.js",
+        "README.md",
+        "COOLIFY_DEPLOY.md",
+        "src/diagnostics.js",
+        "test/diagnostics.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 1,
+      "commit": "6a8d7e2",
+      "failure_reason": null
+    },
+    {
+      "quick_id": "261006-fgf",
+      "client_id": null,
+      "description": "/projects card: strip the claude- prefix from the session name shown in the Status line (Active (Session: Empty))",
+      "status": "complete",
+      "depends_on": [],
+      "planned_files": [
+        "src/projects/menu.js",
+        "test/project_manager.test.js"
+      ],
+      "directory": null,
+      "worktree": null,
+      "dispatched_worktree": null,
+      "dispatched_branch": null,
+      "dispatched_base": null,
+      "wave": 0,
+      "commit": "6d5191e",
+      "failure_reason": null
+    }
+  ]
+}
