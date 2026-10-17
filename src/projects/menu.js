@@ -26,7 +26,15 @@ export function buildProjectsMenu(projects) {
   };
 }
 
-export function buildProjectActionView(project) {
+// A tab's status mark. `listAgentTabs` reports 'working', 'idle' or null, so
+// anything else is treated as unknown.
+function tabMark(status) {
+  if (status === 'working') return '🟢';
+  if (status === 'idle') return '⚪️';
+  return '⚫️';
+}
+
+export function buildProjectActionView(project, tabs = []) {
   const isRunning = project.runningSessions && project.runningSessions.length > 0;
   const status = isRunning
     ? `🟢 Active (Session: ${projectNameFromSession(project.runningSessions[0])})`
@@ -36,11 +44,21 @@ export function buildProjectActionView(project) {
     `📁 *Project:* \`${project.name}\``,
     `📍 *Path:* \`${project.path}\``,
     `📊 *Status:* ${status}`,
+    ...(tabs.length > 0 ? ['⌨️ *Terminals:*'] : []),
     '',
     'Choose an action below:'
   ].join('\n');
 
   const keyboard = [];
+
+  // One row per agent tab, above the session buttons. `cleanTitle` reaches the
+  // button label untouched: Telegram does not parse Markdown in button text, so
+  // stripping would corrupt real titles for nothing.
+  for (const tab of tabs) {
+    keyboard.push([
+      { text: `${tabMark(tab.status)} ${tab.cleanTitle}`, callback_data: `orca_tab:${tab.handle}` }
+    ]);
+  }
 
   if (isRunning) {
     keyboard.push([
