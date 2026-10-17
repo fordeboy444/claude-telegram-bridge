@@ -46,8 +46,17 @@ export async function listAgentTabs(client) {
     const handle = record.handle;
     if (typeof handle !== 'string' || handle === '') continue;
 
-    const { isRunningAgent, status } = await client.agentStatus(handle);
-    if (isRunningAgent !== true) continue;
+    // ONLY this probe degrades. One tab whose answer never comes must not empty
+    // the picker (spec §8 B2: a plain message, never a throw), but a broken
+    // list() above still reaches the caller, which owns that message.
+    let probe;
+    try {
+      probe = await client.agentStatus(handle);
+    } catch (err) {
+      console.warn('⚠️ Orca tab probe failed (' + handle + '):', err.message);
+      continue;
+    }
+    if (probe?.isRunningAgent !== true) continue;
 
     const title = typeof record.title === 'string' ? record.title : '';
     tabs.push({
@@ -56,7 +65,7 @@ export async function listAgentTabs(client) {
       cleanTitle: stripTitleGlyph(title),
       projectPath: record.worktreePath ?? null,
       repoId: repoIdFromWorktreeId(record.worktreeId),
-      status: status ?? null
+      status: probe.status ?? null
     });
   }
 
@@ -110,6 +119,8 @@ async function listTranscripts(projectDir) {
 // The transcript file that belongs to this tab, or null when no file clearly
 // does. `projectDir` overrides the derived directory; without it the directory
 // comes from the tab's own project path.
+// `tab` is a Tab from listAgentTabs (it carries `projectPath`), NOT a raw Orca
+// terminal record (which carries `worktreePath` instead).
 export async function resolveTranscript(tab, { claudeHome, projectDir } = {}) {
   let dir = projectDir;
   if (!dir) {

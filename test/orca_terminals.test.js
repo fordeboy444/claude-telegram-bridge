@@ -11,6 +11,7 @@ import {
   stripTitleGlyph, repoIdFromWorktreeId, listAgentTabs, resolveTranscript, projectDirFor
 } from '../src/orca/terminals.js';
 import { getProjectSlug } from '../src/tmux/session_reader.js';
+import { OrcaRpcError } from '../src/orca/runtime_client.js';
 
 const fakeClient = (terminals, statuses = {}) => ({
   list: async () => terminals,
@@ -96,6 +97,42 @@ test('listAgentTabs drops a disconnected tab even when it runs an agent', async 
   // A disconnected tab is skipped before the status probe: it costs one RPC
   // each, and its answer cannot make the tab usable.
   assert.deepEqual(probed, []);
+});
+
+test('listAgentTabs skips a tab whose agentStatus probe throws', async () => {
+  const h2Path = '/home/orca/Projects/Other Agent';
+  const client = {
+    list: async () => [
+      tab({ handle: 'h1' }),
+      tab({ handle: 'h2', worktreePath: h2Path, worktreeId: `repo-two::${h2Path}` })
+    ],
+    agentStatus: async (h) => {
+      if (h === 'h1') {
+        throw new OrcaRpcError('Orca did not answer terminal.agentStatus', { code: 'timeout' });
+      }
+      return { isRunningAgent: true, status: 'working' };
+    }
+  };
+
+  const result = await listAgentTabs(client);
+
+  // One dead tab must not empty the picker: the good tab still shows.
+  assert.equal(result.length, 1);
+  assert.equal(result[0].handle, 'h2');
+  assert.equal(result[0].projectPath, h2Path);
+});
+
+test('listAgentTabs lets a list() failure reach the caller', async () => {
+  const brokenClient = {
+    list: async () => {
+      throw new OrcaRpcError('Cannot read the Orca runtime file', { code: 'runtime_unavailable' });
+    },
+    agentStatus: async () => ({ isRunningAgent: true, status: 'working' })
+  };
+
+  // A stale socket or a missing runtime json is the caller's message to send,
+  // so it must not be swallowed here.
+  await assert.rejects(() => listAgentTabs(brokenClient));
 });
 
 test('projectDirFor slugifies the path the way Claude Code does', () => {
