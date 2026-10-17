@@ -333,6 +333,35 @@ test('resolveTranscript prefers the transcript whose last ai-title matches the t
   assert.equal(await resolveTranscript(t, { claudeHome, projectDir }), mine);
 });
 
+test('resolveTranscript matches the ai-title on an orca target record', async () => {
+  const claudeHome = await tempHome();
+  const projectDir = path.join(claudeHome, 'projects', 'some-slug');
+  await fs.mkdir(projectDir, { recursive: true });
+  const t = await agentTab();
+
+  // The reader re-pins with an orcaTarget, which carries `title`, not
+  // `cleanTitle`. Without the fallback the title link is lost, and the registry
+  // answers with the OTHER tab's transcript.
+  const target = {
+    kind: 'orca', handle: t.handle, title: t.cleanTitle,
+    projectPath: t.projectPath, transcriptFile: null
+  };
+
+  const mine = await writeTranscript(projectDir, 'mine.jsonl', [
+    { type: 'mode' },
+    { type: 'ai-title', aiTitle: 'Casual greeting' }
+  ], 1000);
+  await writeTranscript(projectDir, 'other.jsonl', [
+    { type: 'mode' },
+    { type: 'ai-title', aiTitle: 'Something else' }
+  ], 2000);
+  await writeRegistryEntry(claudeHome, 222, {
+    sessionId: 'other', cwd: t.projectPath, updatedAt: 999
+  });
+
+  assert.equal(await resolveTranscript(target, { claudeHome, projectDir }), mine);
+});
+
 test('resolveTranscript prefers an ai-title match over the registry', async () => {
   const claudeHome = await tempHome();
   const projectDir = path.join(claudeHome, 'projects', 'some-slug');

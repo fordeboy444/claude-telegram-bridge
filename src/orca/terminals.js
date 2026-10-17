@@ -210,8 +210,9 @@ async function listTranscripts(projectDir) {
 // The transcript file that belongs to this tab, or null when no file clearly
 // does. `projectDir` overrides the derived directory; without it the directory
 // comes from the tab's own project path.
-// `tab` is a Tab from listAgentTabs (it carries `projectPath`), NOT a raw Orca
-// terminal record (which carries `worktreePath` instead).
+// `tab` is a Tab from listAgentTabs (it carries `projectPath` and
+// `cleanTitle`), or an orcaTarget (it carries `projectPath` and `title`), NOT a
+// raw Orca terminal record (which carries `worktreePath` instead).
 export async function resolveTranscript(tab, { claudeHome, projectDir } = {}) {
   let dir = projectDir;
   if (!dir) {
@@ -231,7 +232,12 @@ export async function resolveTranscript(tab, { claudeHome, projectDir } = {}) {
   // The exact link first: this tab's own title inside a transcript. Claude Code
   // 2.1.302 opens a transcript with a metadata record that carries no cwd, so
   // the probe below links nothing on a modern file.
-  const title = typeof tab?.cleanTitle === 'string' && tab.cleanTitle !== '' ? tab.cleanTitle : null;
+  // A Tab carries `cleanTitle`, but the reader re-pins with an orcaTarget,
+  // which carries `title` (already clean). Strip the glyph either way: a lost
+  // title link lets the registry pick another tab's transcript.
+  const title = typeof tab?.cleanTitle === 'string' && tab.cleanTitle !== ''
+    ? tab.cleanTitle
+    : stripTitleGlyph(tab?.title);
   const registered = await registryTranscript(tab, claudeHome, dir, candidates);
 
   if (title) {
