@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { getDefaultOrcaDataPath, readOrcaProjects } from '../src/projects/orca_reader.js';
+import {
+  getDefaultOrcaDataPath,
+  readOrcaProjects,
+  correlateOrcaProjects
+} from '../src/projects/orca_reader.js';
 
 test('getDefaultOrcaDataPath returns APPDATA path on windows or homedir fallback', () => {
   const p = getDefaultOrcaDataPath();
@@ -84,4 +88,30 @@ test('readOrcaProjects handles missing or corrupted orca-data.json gracefully by
   assert.deepEqual(corruptRes, []);
 
   await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+test('correlateOrcaProjects carries repoIds onto the project', () => {
+  // §6.3 matches a terminal tab to a project by repo id. The correlation
+  // already reads the ids to find the path; they must survive onto the record.
+  const repos = [
+    { id: '6147efad-3c9e-4a1b-8f2d-0a1b2c3d4e5f', name: 'Main Agent', path: '/home/orca/Projects/Main Agent' }
+  ];
+  const projects = [
+    { displayName: 'Main Agent', sourceRepoIds: ['6147efad-3c9e-4a1b-8f2d-0a1b2c3d4e5f'] }
+  ];
+
+  const out = correlateOrcaProjects(repos, projects);
+
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].repoIds, ['6147efad-3c9e-4a1b-8f2d-0a1b2c3d4e5f']);
+  assert.equal(out[0].path, '/home/orca/Projects/Main Agent');
+});
+
+test('correlateOrcaProjects defaults repoIds to an empty array', () => {
+  // An unknown repo id must be the documented empty list, never undefined:
+  // downstream does project.repoIds.includes(...).
+  const out = correlateOrcaProjects([], [{ displayName: 'Orphan' }]);
+
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].repoIds, []);
 });

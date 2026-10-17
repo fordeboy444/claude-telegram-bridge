@@ -161,6 +161,35 @@ test('findProjectBySession resolves the project that owns a live session', async
   assert.equal(noMatch, null);
 });
 
+test('listProjects carries repoIds and defaults to an empty array', async () => {
+  // §6.3 matches a live Orca tab to a project by repo id, so every record
+  // needs the field. `[]` means "unknown" and must never be undefined.
+  const fromOrca = new ProjectManager('/tmp/projects', { listSessions: async () => [] }, {
+    orcaReader: async () => [
+      { name: 'With Ids', displayName: 'With Ids', path: '/orca/1', kind: 'orca', repoIds: ['r1'] },
+      { name: 'No Ids', displayName: 'No Ids', path: '/orca/2', kind: 'orca' }
+    ]
+  });
+  const orcaList = await fromOrca.listProjects();
+
+  assert.deepEqual(orcaList.find(p => p.name === 'With Ids').repoIds, ['r1']);
+  assert.deepEqual(orcaList.find(p => p.name === 'No Ids').repoIds, []);
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-repoids-'));
+  await fs.mkdir(path.join(tmpDir, 'web-backend'));
+  try {
+    const fallback = new ProjectManager(tmpDir, { listSessions: async () => [] }, {
+      orcaReader: async () => []
+    });
+    const dirList = await fallback.listProjects();
+
+    assert.equal(dirList.length, 1);
+    assert.deepEqual(dirList[0].repoIds, [], 'a readdir fallback project has no known repo id');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('buildProjectsMenu renders list with status badges', () => {
   const projects = [
     { name: 'web-backend', runningSessions: ['claude-web-backend'] },

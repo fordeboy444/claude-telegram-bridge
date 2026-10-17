@@ -40,7 +40,11 @@ export function getDefaultOrcaDbPath(opts) {
  * Correlates Orca projects with the repository paths they point at. Accepts
  * both the project.displayName || project.name and the sourceRepoIds ||
  * repoIds schema variants, so one shape works for the JSON and SQLite stores.
- * @returns {Array<{name: string, displayName: string, path: string|null, kind: string}>}
+ *
+ * The matched repo ids are kept on the result. A caller matches a live Orca
+ * terminal tab to a project by repo id (never by path string), so the ids
+ * must survive this function. `[]` means "no known repo id".
+ * @returns {Array<{name: string, displayName: string, path: string|null, kind: string, repoIds: string[]}>}
  */
 export function correlateOrcaProjects(repos, projects) {
   if (!Array.isArray(projects)) return [];
@@ -59,9 +63,10 @@ export function correlateOrcaProjects(repos, projects) {
     if (!projectName) continue;
 
     const repoIds = project.sourceRepoIds || project.repoIds || [];
+    const repoIdList = Array.isArray(repoIds) ? repoIds : [];
     let repoPath = null;
-    if (Array.isArray(repoIds) && repoIds.length > 0) {
-      for (const rId of repoIds) {
+    if (repoIdList.length > 0) {
+      for (const rId of repoIdList) {
         if (reposMap.has(rId)) {
           repoPath = reposMap.get(rId);
           break;
@@ -73,7 +78,8 @@ export function correlateOrcaProjects(repos, projects) {
       name: projectName,
       displayName: project.displayName || project.name,
       path: repoPath,
-      kind: 'orca'
+      kind: 'orca',
+      repoIds: repoIdList
     });
   }
   return results;
@@ -82,7 +88,7 @@ export function correlateOrcaProjects(repos, projects) {
 /**
  * Reads and parses Orca's legacy JSON workspace configuration.
  * @param {string} [filePath] Optional custom path to orca-data.json
- * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string}>>}
+ * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string, repoIds: string[]}>>}
  */
 export async function readOrcaProjects(filePath = getDefaultOrcaDataPath()) {
   try {
@@ -103,7 +109,7 @@ export async function readOrcaProjects(filePath = getDefaultOrcaDataPath()) {
  * running Orca is never disturbed, and it needs no npm dependency because
  * Node 22+ ships node:sqlite.
  * @param {string} [dbPath] Optional custom path to profile-state.db
- * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string}>>}
+ * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string, repoIds: string[]}>>}
  */
 export async function readOrcaProjectsFromDb(dbPath = getDefaultOrcaDbPath()) {
   let db;
@@ -130,7 +136,7 @@ export async function readOrcaProjectsFromDb(dbPath = getDefaultOrcaDbPath()) {
  * Reads the Orca project list from the live store first, then from the legacy
  * JSON file. Orca migrated to SQLite on 2026-10-05 and stopped writing the
  * JSON, so the JSON is only a fallback for older installs.
- * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string}>>}
+ * @returns {Promise<Array<{name: string, displayName: string, path: string|null, kind: string, repoIds: string[]}>>}
  */
 export async function readOrcaProjectsAuto(opts = {}) {
   const live = await readOrcaProjectsFromDb(opts.dbPath || getDefaultOrcaDbPath());

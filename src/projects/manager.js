@@ -81,7 +81,8 @@ export class ProjectManager {
             name: item.name,
             displayName: item.displayName || item.name,
             path: item.path,
-            kind: item.kind || 'orca'
+            kind: item.kind || 'orca',
+            repoIds: item.repoIds || []
           }));
         }
       } catch {}
@@ -95,7 +96,9 @@ export class ProjectManager {
             name: d.name,
             displayName: d.name,
             path: path.join(this.projectsDir, d.name),
-            kind: 'directory'
+            kind: 'directory',
+            // A plain folder is not an Orca project, so it has no repo id.
+            repoIds: []
           }));
         } catch {}
       }
@@ -110,6 +113,9 @@ export class ProjectManager {
           displayName: p.displayName || p.name,
           path: p.path,
           kind: p.kind,
+          // Repo ids let a caller match a live Orca terminal tab to this
+          // project (by id, never by path string). `[]` means unknown.
+          repoIds: p.repoIds || [],
           runningSessions: running
         };
       });
