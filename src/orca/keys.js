@@ -13,13 +13,8 @@ export const ORCA_KEY_BYTES = Object.freeze({
  * @returns {string | null}
  */
 export function keyToBytes(name) {
-  if (ORCA_KEY_BYTES[name]) {
-    return ORCA_KEY_BYTES[name];
-  }
-
-  if (/^[1-9]$/.test(name)) {
-    return name;
-  }
-
+  if (typeof name !== 'string') return null;
+  if (Object.hasOwn(ORCA_KEY_BYTES, name)) return ORCA_KEY_BYTES[name];
+  if (/^[1-9]$/.test(name)) return name;
   return null;
 }
