@@ -244,6 +244,28 @@ test('OrcaRuntimeClient.send passes text, enter and interrupt through', async ()
   });
 });
 
+test('OrcaRuntimeClient.send defaults enter and interrupt to false', async () => {
+  const dir = await tempDir();
+  const p = await writeRuntimeJson(dir, RUNTIME_BODY);
+  let captured;
+  const connect = () => makeEchoSocket((req) => {
+    captured = req;
+    return { id: req.id, ok: true, result: { send: { handle: 'term_x', accepted: true, bytesWritten: 2 } } };
+  });
+  const client = new OrcaRuntimeClient({ runtimeJsonPath: p, connect });
+
+  await client.send('term_x', { text: 'hi' });
+
+  // Both flags are always present, and both default to the safe value: a
+  // caller that forgets a flag must never submit or interrupt the tab.
+  assert.deepEqual(captured.params, {
+    terminal: 'term_x',
+    text: 'hi',
+    enter: false,
+    interrupt: false
+  });
+});
+
 test('OrcaRuntimeClient.send reports accepted:false without throwing', async () => {
   const dir = await tempDir();
   const p = await writeRuntimeJson(dir, RUNTIME_BODY);

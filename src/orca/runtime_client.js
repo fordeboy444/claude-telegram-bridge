@@ -198,8 +198,9 @@ export class OrcaRuntimeClient {
   async send(handle, { text, enter, interrupt } = {}) {
     const params = { terminal: handle };
     if (text !== undefined) params.text = text;
-    if (enter !== undefined) params.enter = Boolean(enter);
-    // interrupt is ALWAYS a boolean: callers rely on the key being present.
+    // enter and interrupt are ALWAYS booleans, and the safe default is false:
+    // a caller that forgets a flag must never submit or interrupt the tab.
+    params.enter = Boolean(enter);
     params.interrupt = Boolean(interrupt);
 
     const result = await this.request('terminal.send', params);
