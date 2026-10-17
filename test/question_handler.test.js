@@ -189,22 +189,58 @@ test('formatQuestionCard supports multiSelect mode with checkboxes and submit bu
   assert.deepEqual(keyboard[3], [{ text: '✅ Submit', callback_data: 'submit_q' }]);
 });
 
-test('formatQuestionCard renders every question of a multi-question payload', () => {
+test('formatQuestionCard shows one question at a time', () => {
   const payload = {
     questions: [
       { question: 'Color?', options: [{ label: 'Red' }], multiSelect: false },
-      { question: 'Size?', options: [{ label: 'Big' }], multiSelect: true }
+      { question: 'Size?', options: [{ label: 'Big' }], multiSelect: false }
     ]
   };
 
-  const card = formatQuestionCard(payload);
-  assert.ok(card.text.includes('Color?'));
-  assert.ok(card.text.includes('Size?'));
+  const first = formatQuestionCard(payload);
+  assert.ok(first.text.includes('Question 1 of 2'));
+  assert.ok(first.text.includes('Color?'));
+  assert.ok(!first.text.includes('Size?'));
+  assert.deepEqual(first.reply_markup.inline_keyboard, [
+    [{ text: '1️⃣ Red', callback_data: 'qa:0:0' }]
+  ]);
 
-  const buttons = card.reply_markup.inline_keyboard.flat();
-  assert.ok(buttons.some(b => b.callback_data === 'qa:0:0'));
-  assert.ok(buttons.some(b => b.callback_data === 'qa:1:0'));
-  assert.ok(buttons.some(b => b.callback_data === 'submit_q'));
+  const second = formatQuestionCard(payload, new Map([[0, new Set([0])]]), 1);
+  assert.ok(second.text.includes('Question 2 of 2'));
+  assert.ok(second.text.includes('Size?'));
+  assert.ok(!second.text.includes('Color?'));
+  assert.deepEqual(second.reply_markup.inline_keyboard, [
+    [{ text: '1️⃣ Big', callback_data: 'qa:1:0' }]
+  ]);
+});
+
+test('formatQuestionCard adds Next on a multi-select page that is not last', () => {
+  const payload = {
+    questions: [
+      { question: 'Items?', multiSelect: true, options: [{ label: 'A' }] },
+      { question: 'Next?', options: [{ label: 'B' }], multiSelect: false }
+    ]
+  };
+
+  const card = formatQuestionCard(payload, new Map([[0, new Set([0])]]), 0);
+  assert.deepEqual(card.reply_markup.inline_keyboard, [
+    [{ text: '☑️ 1️⃣ A', callback_data: 'qa:0:0' }],
+    [{ text: '▶ Next', callback_data: 'qn:1' }]
+  ]);
+});
+
+test('formatQuestionCard adds Submit on a last page after a multi-select page', () => {
+  const payload = {
+    questions: [
+      { question: 'Items?', multiSelect: true, options: [{ label: 'A' }] },
+      { question: 'Last?', options: [{ label: 'B' }], multiSelect: false }
+    ]
+  };
+
+  const card = formatQuestionCard(payload, new Map([[1, new Set([0])]]), 1);
+  assert.deepEqual(card.reply_markup.inline_keyboard.at(-1), [
+    { text: '✅ Submit', callback_data: 'submit_q' }
+  ]);
 });
 
 // ---------- TmuxController.sendKeysWithDelay ----------

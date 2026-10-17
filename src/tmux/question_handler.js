@@ -57,7 +57,9 @@ export function buildAnswerKeys(questions, answers = new Map()) {
 
 // questions: output of normalizeQuestions (raw payloads are normalized too).
 // answers: Map<questionIndex, Set<optionIndex>>.
-export function formatQuestionCard(questions, answers = new Map()) {
+// activeIndex: the question shown on this card. A multi-question payload is
+// shown one question at a time; the caller advances the index after an answer.
+export function formatQuestionCard(questions, answers = new Map(), activeIndex = 0) {
   const qs = Array.isArray(questions) ? questions : normalizeQuestions(questions);
   if (!qs || qs.length === 0) {
     return {
@@ -68,65 +70,67 @@ export function formatQuestionCard(questions, answers = new Map()) {
     };
   }
 
-  const hasMulti = qs.some(q => q.multiSelect);
-  const isSingleQuestion = qs.length === 1;
+  const total = qs.length;
+  const index = Math.min(Math.max(Number.isInteger(activeIndex) ? activeIndex : 0, 0), total - 1);
+  const q = qs[index];
+  const isSingleQuestion = total === 1;
+  const isLast = index === total - 1;
+  const allSingleChoice = qs.every(item => !item.multiSelect);
+
   const textLines = [
     isSingleQuestion
-      ? (hasMulti ? '❓ *Question (Multiple Choice)*' : '❓ *Question*')
-      : `❓ *Questions (${questions.length})*`,
+      ? (q.multiSelect ? '❓ *Question (Multiple Choice)*' : '❓ *Question*')
+      : `❓ *Question ${index + 1} of ${total}*${q.multiSelect ? ' _(select several)_' : ''}`,
+    '',
+    isSingleQuestion ? q.question : `*${q.question}*`,
     ''
   ];
 
   const inline_keyboard = [];
+  const sel = answers.get(index) || new Set();
 
-  qs.forEach((q, qi) => {
-    if (isSingleQuestion) {
-      textLines.push(q.question, '');
-    } else {
-      textLines.push(`*${qi + 1}. ${q.question}*${q.multiSelect ? ' _(select several)_' : ''}`, '');
-    }
+  q.options.forEach((opt, oi) => {
+    const emoji = EMOJI_NUMBERS[oi] || `${oi + 1}️⃣`;
+    const label = typeof opt === 'string' ? opt : (opt.label || `Option ${oi + 1}`);
+    const description = typeof opt === 'object' && opt !== null ? opt.description : null;
 
-    const sel = answers.get(qi) || new Set();
-    q.options.forEach((opt, oi) => {
-      const emoji = EMOJI_NUMBERS[oi] || `${oi + 1}️⃣`;
-      const label = typeof opt === 'string' ? opt : (opt.label || `Option ${oi + 1}`);
-      const description = typeof opt === 'object' && opt !== null ? opt.description : null;
-
-      if (q.multiSelect) {
-        const checkMark = sel.has(oi) ? '☑️' : '◻️';
-        textLines.push(`${emoji} ${checkMark} *${label}*`);
-        if (description) {
-          textLines.push(`   _${description}_`);
-        }
-        inline_keyboard.push([
-          {
-            text: `${checkMark} ${emoji} ${label}`,
-            callback_data: `qa:${qi}:${oi}`
-          }
-        ]);
-      } else {
-        const selected = sel.has(oi);
-        textLines.push(`${emoji} ${selected ? '✅ ' : ''}*${label}*`);
-        if (description) {
-          textLines.push(`   _${description}_`);
-        }
-        inline_keyboard.push([
-          {
-            text: `${selected ? '✅ ' : ''}${emoji} ${label}`,
-            callback_data: `qa:${qi}:${oi}`
-          }
-        ]);
+    if (q.multiSelect) {
+      const checkMark = sel.has(oi) ? '☑️' : '◻️';
+      textLines.push(`${emoji} ${checkMark} *${label}*`);
+      if (description) {
+        textLines.push(`   _${description}_`);
       }
-    });
-
-    if (!isSingleQuestion && qi < questions.length - 1) {
-      textLines.push('');
+      inline_keyboard.push([
+        {
+          text: `${checkMark} ${emoji} ${label}`,
+          callback_data: `qa:${index}:${oi}`
+        }
+      ]);
+    } else {
+      const selected = sel.has(oi);
+      textLines.push(`${emoji} ${selected ? '✅ ' : ''}*${label}*`);
+      if (description) {
+        textLines.push(`   _${description}_`);
+      }
+      inline_keyboard.push([
+        {
+          text: `${selected ? '✅ ' : ''}${emoji} ${label}`,
+          callback_data: `qa:${index}:${oi}`
+        }
+      ]);
     }
   });
 
-  // Pure single-choice sets submit automatically once every question is
-  // answered; only multi-select needs an explicit Submit tap.
-  if (hasMulti) {
+  // Multi-select pages need an explicit control to leave the page. The last
+  // page submits. A trailing single-choice page after a multi-select page
+  // also needs Submit, because the auto-submit path needs all-single-choice.
+  if (q.multiSelect) {
+    inline_keyboard.push([
+      isLast
+        ? { text: '✅ Submit', callback_data: 'submit_q' }
+        : { text: '▶ Next', callback_data: `qn:${index + 1}` }
+    ]);
+  } else if (isLast && !allSingleChoice) {
     inline_keyboard.push([
       {
         text: '✅ Submit',

@@ -367,9 +367,11 @@ export function createBot(config, deps = {}) {
             const questions = normalizeQuestions(event.content);
             activeQuestion = {
               questions,
-              answers: new Map()
+              answers: new Map(),
+              // One question is shown at a time; the card advances after each answer.
+              index: 0
             };
-            const card = formatQuestionCard(questions, activeQuestion.answers);
+            const card = formatQuestionCard(questions, activeQuestion.answers, activeQuestion.index);
             await sendWithFallback(bot, activeChatId, card.text, { reply_markup: card.reply_markup });
           } else if (event.type === 'result') {
             // Turn ended (success or error), even with no final text block.
@@ -792,6 +794,24 @@ export function createBot(config, deps = {}) {
     return false;
   }
 
+  // Show one question page of a multi-question card and keep the state index.
+  async function renderActiveQuestion(ctx, index) {
+    if (!activeQuestion) {
+      return ctx.answerCbQuery('Question expired or not found');
+    }
+    activeQuestion.index = index;
+    const card = formatQuestionCard(activeQuestion.questions, activeQuestion.answers, index);
+    try {
+      await ctx.editMessageText(card.text, {
+        parse_mode: 'Markdown',
+        reply_markup: card.reply_markup
+      });
+    } catch {
+      // Ignore Telegram message not modified error
+    }
+    return ctx.answerCbQuery();
+  }
+
   async function submitAnswers(ctx) {
     const question = activeQuestion;
     activeQuestion = null;
@@ -833,34 +853,42 @@ export function createBot(config, deps = {}) {
         sel.add(oi);
       }
       activeQuestion.answers.set(qi, sel);
-    } else {
-      activeQuestion.answers.set(qi, new Set([oi]));
+      // Stay on this page; the card shows a Next or Submit button.
+      return renderActiveQuestion(ctx, qi);
     }
 
-    // Pure single-choice sets submit as soon as every question is answered.
+    activeQuestion.answers.set(qi, new Set([oi]));
+    const isLast = qi === activeQuestion.questions.length - 1;
+
+    // Single-choice answers advance to the next question one page at a time.
+    if (!isLast) {
+      return renderActiveQuestion(ctx, qi + 1);
+    }
+
+    // Pure single-choice sets submit as soon as the last question is answered.
     const allSingleChoice = activeQuestion.questions.every(q => !q.multiSelect);
-    const allAnswered = activeQuestion.questions.every(
-      (q, i) => (activeQuestion.answers.get(i) || new Set()).size > 0
-    );
-
-    if (allSingleChoice && allAnswered) {
-      if (!activeTarget) {
-        return ctx.answerCbQuery('No active session');
-      }
-      if (!(await ensureSessionAlive(ctx))) return;
-      await submitAnswers(ctx);
-    } else {
-      const card = formatQuestionCard(activeQuestion.questions, activeQuestion.answers);
-      try {
-        await ctx.editMessageText(card.text, {
-          parse_mode: 'Markdown',
-          reply_markup: card.reply_markup
-        });
-      } catch {
-        // Ignore Telegram message not modified error
-      }
-      await ctx.answerCbQuery();
+    if (!allSingleChoice) {
+      // An earlier multi-select page needs an explicit Submit tap.
+      return renderActiveQuestion(ctx, qi);
     }
+
+    if (!activeTarget) {
+      return ctx.answerCbQuery('No active session');
+    }
+    if (!(await ensureSessionAlive(ctx))) return;
+    await submitAnswers(ctx);
+  });
+
+  // "▶ Next" on a multi-select page that is not the last question.
+  bot.action(/qn:(\d+)/, async (ctx) => {
+    const next = parseInt(ctx.match[1], 10);
+    if (!activeQuestion) {
+      return ctx.answerCbQuery('Question expired or not found');
+    }
+    if (!activeQuestion.questions[next]) {
+      return ctx.answerCbQuery('Question not found');
+    }
+    return renderActiveQuestion(ctx, next);
   });
 
   bot.action('submit_q', async (ctx) => {

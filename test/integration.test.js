@@ -117,6 +117,123 @@ test('qa callback action answers a single-choice question with digit then Enter'
   botInstance.stop();
 });
 
+test('multi-question card shows one question at a time, then submits at the end', async () => {
+  const sentSequences = [];
+  const mockBot = makeBotMock();
+
+  const mockTmux = makeTmuxMock({
+    sendKeysWithDelay: async (session, keys) => {
+      sentSequences.push({ session, keys });
+    }
+  });
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig(), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text, extra) => {
+    sentMessages.push({ chatId, text, extra });
+  };
+
+  readerOnEvent({
+    type: 'question',
+    content: {
+      questions: [
+        { question: 'Color?', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false },
+        { question: 'Size?', options: [{ label: 'Big' }, { label: 'Small' }], multiSelect: false }
+      ]
+    }
+  });
+
+  const first = sentMessages.at(-1);
+  assert.match(first.text, /Question 1 of 2/);
+  assert.ok(!first.text.includes('Size?'), 'second question is not shown yet');
+  assert.equal(first.extra.reply_markup.inline_keyboard.length, 2);
+
+  const qaHandler = actionHandler(mockBot, 'qa:');
+  let edited = null;
+  await qaHandler({
+    match: ['qa:0:1', '0', '1'],
+    chat: { id: 12345 },
+    answerCbQuery: async () => {},
+    editMessageText: async (text, extra) => { edited = { text, extra }; }
+  });
+
+  assert.ok(edited, 'the card advanced to the next question');
+  assert.match(edited.text, /Question 2 of 2/);
+  assert.ok(!edited.text.includes('Color?'), 'first question is replaced');
+  assert.equal(sentSequences.length, 0, 'no keys are sent before the last answer');
+
+  let replyText = null;
+  await qaHandler({
+    match: ['qa:1:0', '1', '0'],
+    chat: { id: 12345 },
+    answerCbQuery: async () => {},
+    editMessageText: async () => {},
+    reply: async (text) => { replyText = text; }
+  });
+
+  assert.equal(sentSequences.length, 1);
+  assert.deepEqual(sentSequences[0].keys, ['2', '1', 'Enter']);
+  assert.match(replyText, /submitted/i);
+
+  botInstance.stop();
+});
+
+test('qn action moves a multi-select card to the next question', async () => {
+  const mockBot = makeBotMock();
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig(), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  mockBot.telegram.sendMessage = async () => {};
+  readerOnEvent({
+    type: 'question',
+    content: {
+      questions: [
+        { question: 'Items?', multiSelect: true, options: [{ label: 'A' }] },
+        { question: 'Last?', options: [{ label: 'B' }], multiSelect: false }
+      ]
+    }
+  });
+
+  const qnHandler = actionHandler(mockBot, 'qn:');
+  assert.ok(qnHandler, 'qn action registered');
+
+  let edited = null;
+  await qnHandler({
+    match: ['qn:1', '1'],
+    answerCbQuery: async () => {},
+    editMessageText: async (text, extra) => { edited = { text, extra }; }
+  });
+
+  assert.ok(edited);
+  assert.match(edited.text, /Question 2 of 2/);
+  assert.ok(edited.text.includes('Last?'));
+
+  botInstance.stop();
+});
+
 test('qa toggle and submit_q handle multiSelect question answers with key sequence', async () => {
   const sentSequences = [];
   let sentKeys = [];
