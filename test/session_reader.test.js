@@ -178,7 +178,10 @@ test('ClaudeSessionReader.start polls and streams events continuously', async ()
   await fs.writeFile(sessionFile, newLines.join('\n') + '\n');
 
   // Wait for poll
-  await new Promise(r => setTimeout(r, 150));
+  assert.ok(
+    await waitFor(() => receivedEvents.length >= 1),
+    'the streamed line is delivered'
+  );
   reader.stop();
 
   assert.ok(receivedEvents.length >= 1);
@@ -299,7 +302,10 @@ test('ClaudeSessionReader.start with a sessionId polls the bound file and ignore
   await fs.utimes(otherFile, now / 1000 + 10, now / 1000 + 10);
 
   // Wait for polls
-  await new Promise(r => setTimeout(r, 150));
+  assert.ok(
+    await waitFor(() => receivedEvents.length >= 1),
+    'the bound file is polled'
+  );
   reader.stop();
 
   assert.equal(receivedEvents.length, 1);
@@ -336,23 +342,34 @@ test('ClaudeSessionReader re-binds to the new session id after /clear', async ()
   // The old binding streams first
   await new Promise(r => setTimeout(r, 120));
   await fs.appendFile(oldFile, line('Old session reply.'));
-  await new Promise(r => setTimeout(r, 120));
+  assert.ok(
+    await waitFor(() => received.some(e => e.content === 'Old session reply.')),
+    'old binding streams'
+  );
   assert.ok(received.some(e => e.content === 'Old session reply.'), 'old binding streams');
 
   // /clear: the new transcript already has content, then the hook publishes the new id
   await fs.writeFile(newFile, line('Pre-hop leftover line.'));
   hopReady = true;
 
-  // Re-bind runs on every 5th tick (100ms here). The pre-hop lines must be
-  // adopted at the current file size, not replayed.
-  await new Promise(r => setTimeout(r, 300));
+  // Re-bind runs on every 5th tick. The pre-hop lines must be adopted at the
+  // current file size, not replayed.
+  assert.ok(
+    await waitFor(() => reader.sessionId === newId),
+    'the reader re-binds to the new session id'
+  );
   assert.equal(reader.sessionId, newId, 'reader re-bound to the new session id');
-  assert.ok(!received.some(e => e.content === 'Pre-hop leftover line.'), 'no replay of pre-hop lines');
 
-  // Streaming continues on the new file
+  // Streaming continues on the new file. This also proves the new file was read,
+  // without which the no-replay check below would pass on an empty array.
   await fs.appendFile(newFile, line('Post-hop reply.'));
-  await new Promise(r => setTimeout(r, 200));
+  assert.ok(
+    await waitFor(() => received.some(e => e.content === 'Post-hop reply.')),
+    'the post-hop line is delivered'
+  );
   reader.stop();
+
+  assert.ok(!received.some(e => e.content === 'Pre-hop leftover line.'), 'no replay of pre-hop lines');
   assert.ok(received.some(e => e.content === 'Post-hop reply.'), 'streaming resumed on the new transcript');
 });
 
@@ -426,7 +443,10 @@ test('ClaudeSessionReader keeps the pin when getSessionFile returns null', async
 
   // A marker proves the reader is live; the pre-start line is adopted, not read.
   await fs.appendFile(pinnedFile, line('Marker turn.'));
-  await waitFor(() => received.some(e => e.content === 'Marker turn.'));
+  assert.ok(
+    await waitFor(() => received.some(e => e.content === 'Marker turn.')),
+    'the reader must deliver a line before anything else in this test can mean anything'
+  );
 
   // A /clear in the joined tab: the probe answers null. The pin must survive it.
   target = null;
@@ -520,8 +540,12 @@ test('ClaudeSessionReader keeps a null pin and never falls through to newest-fil
   assert.equal(reader.sessionFile, joinedFile, 'the pin is adopted once it appears');
 
   await fs.appendFile(joinedFile, line('Turn after the re-pin.'));
-  // Only after a successful read of the new file can the replay check be trusted.
-  await waitFor(() => received.some(e => e.content === 'Turn after the re-pin.'));
+  // The wait itself is asserted: without it the no-replay check below would pass
+  // on an empty array, which is exactly what a silent reader produces.
+  assert.ok(
+    await waitFor(() => received.some(e => e.content === 'Turn after the re-pin.')),
+    'the reader must read the adopted file before the no-replay check can mean anything'
+  );
   reader.stop();
 
   assert.ok(!received.some(e => e.content === 'Written before the re-pin.'), 'no replay of the adopted file');
@@ -594,8 +618,12 @@ test('ClaudeSessionReader re-pins to a new file and adopts it at its current siz
   assert.equal(reader.sessionFile, fileB, 'the reader re-pinned to the new file');
 
   await fs.appendFile(fileB, line('Tab B new turn.'));
-  // Only after a successful read of tab B can the replay check be trusted.
-  await waitFor(() => received.some(e => e.content === 'Tab B new turn.'));
+  // The wait itself is asserted: without it the two no-replay checks below would
+  // pass on an empty array, which is exactly what a silent reader produces.
+  assert.ok(
+    await waitFor(() => received.some(e => e.content === 'Tab B new turn.')),
+    'the reader must read tab B before the no-replay checks can mean anything'
+  );
   reader.stop();
 
   assert.ok(!received.some(e => e.content === 'Tab B old turn 1.'), 'no replay of tab B history');
@@ -660,7 +688,10 @@ test('ClaudeSessionReader keeps the current binding when getBoundSessionId fails
   // Several bind-check ticks fail; the binding must survive them
   await new Promise(r => setTimeout(r, 300));
   await fs.appendFile(oldFile, line('Still the old session.'));
-  await new Promise(r => setTimeout(r, 120));
+  assert.ok(
+    await waitFor(() => received.some(e => e.content === 'Still the old session.')),
+    'the reader keeps reading the bound file'
+  );
   reader.stop();
 
   assert.equal(reader.sessionId, oldId, 'binding unchanged after read failures');
