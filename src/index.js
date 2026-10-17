@@ -26,6 +26,12 @@ import { listAgentTabs, resolveTranscript } from './orca/terminals.js';
 // Strip the marker so spawned sessions always run as top-level sessions.
 delete process.env.CLAUDE_CODE_CHILD_SESSION;
 
+// One refusal message for every injection site. A tmux key always lands (the
+// controller reports accepted:true by reference), so this text can only come
+// from an Orca tab that refused the write. Never report a success that did
+// not happen.
+const NOT_ACCEPTED = '⚠️ The tab did not accept the input. Nothing was sent.';
+
 export function createBot(config, deps = {}) {
   const bot = deps.bot || new Telegraf(config.botToken);
   const tmux = deps.tmux || new TmuxController(config.tmuxPath);
@@ -510,7 +516,12 @@ export function createBot(config, deps = {}) {
     }
 
     startTyping(ctx.chat?.id);
-    await io.sendText(activeTarget, skill.command, true);
+    const answer = await io.sendText(activeTarget, skill.command, true);
+    if (!answer.accepted) {
+      stopTyping();
+      await ctx.answerCbQuery().catch(() => {});
+      return ctx.reply(NOT_ACCEPTED);
+    }
     await ctx.answerCbQuery(`Running ${skill.name}...`);
     await ctx.reply(`⚡ Injected \`${skill.command}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
   }));
@@ -538,7 +549,12 @@ export function createBot(config, deps = {}) {
 
     const fullCmd = `${skill.command} ${ctx.match[2]}`;
     startTyping(ctx.chat?.id);
-    await io.sendText(activeTarget, fullCmd, true);
+    const answer = await io.sendText(activeTarget, fullCmd, true);
+    if (!answer.accepted) {
+      stopTyping();
+      await ctx.answerCbQuery().catch(() => {});
+      return ctx.reply(NOT_ACCEPTED);
+    }
     await ctx.answerCbQuery(`Running ${fullCmd}...`);
     await ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
   }));
@@ -718,14 +734,24 @@ export function createBot(config, deps = {}) {
 
   // After key playback the question modal should sit on its review screen
   // ("Submit answers"). Claude Code redraws the modal between keystrokes and
-  // can drop a key, so verify the pane text and drive the modal home:
-  // Enter on the review screen, Right on a question page. Returns false when
-  // the modal stays open (keys lost or session dead). Aborts silently if a
-  // NEW question appears: a new modal means the old one already closed.
+  // can drop a key, so confirm the submission and drive the modal home.
+  // A tmux pane is verified by its text: Enter on the review screen, Right on
+  // a question page. An Orca tab has no pane to grep, so its own status is the
+  // signal. Returns false when the modal stays open (keys lost or session
+  // dead). Aborts silently if a NEW question appears: a new modal means the
+  // old one already closed.
   async function ensureModalSubmitted(target, counterAtStart) {
     for (let i = 0; i < 6; i++) {
       await new Promise(r => setTimeout(r, 600));
       if (questionEventCounter !== counterAtStart) return true;
+
+      // 'working' means the modal closed and Claude resumed the turn. An
+      // unreadable status answers null, so the loop keeps waiting.
+      if (target.kind === 'orca') {
+        if ((await io.status(target)) === 'working') return true;
+        continue;
+      }
+
       let pane = '';
       try {
         pane = await tmux.capturePane(target.sessionName, -40);
@@ -851,7 +877,11 @@ export function createBot(config, deps = {}) {
       }
       if (!(await ensureSessionAlive(ctx))) return;
       startTyping(ctx.chat.id);
-      await io.sendText(activeTarget, fullCommand, true);
+      const answer = await io.sendText(activeTarget, fullCommand, true);
+      if (!answer.accepted) {
+        stopTyping();
+        return ctx.reply(NOT_ACCEPTED);
+      }
       return ctx.reply(`⚡ Injected \`${fullCommand}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
     }
 
@@ -875,7 +905,10 @@ export function createBot(config, deps = {}) {
           return ctx.reply(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
         }
         const fullCmd = args ? `${matchedSkill.command} ${args}` : matchedSkill.command;
-        await io.sendText(activeTarget, fullCmd, true);
+        const answer = await io.sendText(activeTarget, fullCmd, true);
+        if (!answer.accepted) {
+          return ctx.reply(NOT_ACCEPTED);
+        }
         return ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
       }
     }
@@ -914,7 +947,7 @@ export function createBot(config, deps = {}) {
     // bytesWritten is 0. Say so instead of leaving the indicator running.
     if (!answer.accepted) {
       stopTyping();
-      return ctx.reply('⚠️ The tab did not accept the input. Nothing was sent.');
+      return ctx.reply(NOT_ACCEPTED);
     }
   });
 
