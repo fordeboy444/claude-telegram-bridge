@@ -100,3 +100,15 @@ test('scanSkills skips a skills-dir plugin with a broken manifest without error'
 
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+test('scanSkills stays silent when a skills directory does not exist', async (t) => {
+  // A project without .claude/skills is normal, not a fault. The old code
+  // warned on every scan, which filled the bridge log with ENOENT noise.
+  const warn = t.mock.method(console, 'warn');
+  const missingDir = path.join(os.tmpdir(), 'no-skills-dir-9f3f01a');
+
+  const skills = await scanSkills([{ dir: missingDir, source: 'project' }]);
+
+  assert.equal(skills.length, 0);
+  assert.equal(warn.mock.callCount(), 0, 'a missing directory must not warn');
+});

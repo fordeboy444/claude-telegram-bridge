@@ -6,7 +6,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createBot } from '../src/index.js';
-import { makeBotMock, makeTmuxMock, defaultTestConfig, actionHandler, makeSkill } from './helpers.js';
+import {
+  makeBotMock, makeTmuxMock, defaultTestConfig, actionHandler, makeSkill,
+  useOrcaConfigRoot, writeOrcaProfileStateDb
+} from './helpers.js';
 import { getProjectSlug } from '../src/tmux/session_reader.js';
 
 test('createBot initializes Telegraf instance with middleware, setMyCommands, and handlers', async () => {
@@ -1067,4 +1070,41 @@ test('typed /effort with no args opens the effort picker instead of injecting', 
   assert.equal(sentKeys[0].enter, true);
 
   botInstance.stop();
+});
+test('attachExistingSession resolves the real Orca project path from the live store', async () => {
+  // Before the live-SQLite reader, findProjectBySession always returned null,
+  // so a restart attached with a guessed path (projectsDir/<session name>).
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'attach-orca-'));
+  const projectsDir = path.join(tmpRoot, 'Projects');
+  await fs.mkdir(projectsDir, { recursive: true });
+  const restoreEnv = useOrcaConfigRoot(tmpRoot);
+  writeOrcaProfileStateDb(tmpRoot, {
+    repos: [{ id: 'r1', path: path.join(projectsDir, 'Main Agent'), kind: 'folder' }],
+    projects: [{ id: 'repo:r1', displayName: 'Main Agent', sourceRepoIds: ['r1'] }]
+  });
+
+  const mockBot = makeBotMock();
+  class MockReader {
+    start() {}
+    stop() {}
+  }
+
+  try {
+    const instance = createBot(defaultTestConfig({ allowedUserIds: ['111'], projectsDir }), {
+      bot: mockBot,
+      tmux: makeTmuxMock({ listSessions: async () => ['claude-Main-Agent'] }),
+      sessionReaderClass: MockReader
+    });
+
+    assert.equal(await instance.attachExistingSession(111), 'claude-Main-Agent');
+    assert.equal(
+      instance.getActiveState().activeProjectPath,
+      path.join(projectsDir, 'Main Agent'),
+      'the attached session must carry the real project path, not a guess'
+    );
+    instance.stop();
+  } finally {
+    restoreEnv();
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
 });

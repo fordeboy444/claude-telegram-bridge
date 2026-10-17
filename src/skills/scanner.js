@@ -131,7 +131,11 @@ export async function scanSkills(directories = []) {
         }
       }
     } catch (err) {
-      console.warn(`⚠️ Skills directory could not be read (${dir}):`, err.message);
+      // An absent skills directory is the normal case (most projects have
+      // none), so ENOENT stays silent. Any other read error is a real fault.
+      if (err.code !== 'ENOENT') {
+        console.warn(`⚠️ Skills directory could not be read (${dir}):`, err.message);
+      }
     }
   }
 

@@ -6,6 +6,34 @@ import path from 'node:path';
 import os from 'node:os';
 import { ProjectManager, generateHookSettings } from '../src/projects/manager.js';
 import { buildProjectsMenu, buildProjectActionView } from '../src/projects/menu.js';
+import { useOrcaConfigRoot, writeOrcaProfileStateDb } from './helpers.js';
+
+test('ProjectManager reads the live Orca SQLite store with no injected reader', async () => {
+  // The default reader must reach profile-state.db. Orca stopped writing
+  // orca-data.json on 2026-10-05, so a JSON-only default lists nothing.
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-orca-'));
+  const restoreEnv = useOrcaConfigRoot(tmpRoot);
+  writeOrcaProfileStateDb(tmpRoot, {
+    repos: [{ id: 'r1', path: '/home/orca/Projects/Main Agent', kind: 'folder' }],
+    projects: [{ id: 'repo:r1', displayName: 'Main Agent', sourceRepoIds: ['r1'] }]
+  });
+
+  try {
+    const manager = new ProjectManager(
+      '/home/orca/Projects',
+      { listSessions: async () => [] },
+      { hookSettingsPath: null }
+    );
+    const list = await manager.listProjects();
+
+    assert.equal(list.length, 1);
+    assert.equal(list[0].name, 'Main Agent');
+    assert.equal(list[0].path, '/home/orca/Projects/Main Agent');
+  } finally {
+    restoreEnv();
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
 
 test('ProjectManager discovers folders and correlates active tmux sessions', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'proj-test-'));
@@ -80,7 +108,9 @@ test('ProjectManager starts a fresh session by terminating previous if existing'
     setSessionOption: async (session, key, value) => { optionsSet.push({ session, key, value }); }
   };
 
-  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: null });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-start-'));
+  await fs.mkdir(path.join(tmpDir, 'web-backend'));
+  const manager = new ProjectManager(tmpDir, mockController, { hookSettingsPath: null });
   const session = await manager.startFreshSession('web-backend');
 
   assert.equal(session, 'claude-web-backend');
@@ -96,6 +126,8 @@ test('ProjectManager starts a fresh session by terminating previous if existing'
   assert.equal(optionsSet[0].session, 'claude-web-backend');
   assert.equal(optionsSet[0].key, '@claude_session_id');
   assert.equal(optionsSet[0].value, match[1]);
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 test('ProjectManager kills all sessions matching project prefix', async () => {
@@ -171,6 +203,45 @@ test('buildProjectActionView renders appropriate buttons based on running status
   assert.ok(suffixView.text.includes('Active (Session: web-backend-2)'), 'suffix variants lose only the literal leading claude- prefix');
 });
 
+test('startFreshSession refuses an explicitly given project path that does not exist', async () => {
+  // tmux silently falls back to the caller's cwd when -c points at a missing
+  // directory. A dead Orca path therefore used to start Claude in /app.
+  let created = null;
+  const mockController = {
+    hasSession: async () => false,
+    newSession: async (name, cwd, cmd) => { created = { name, cwd, cmd }; }
+  };
+  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: null });
+
+  await assert.rejects(
+    () => manager.startFreshSession('Ghost', path.join(os.tmpdir(), 'bridge-missing-project-9f3f01a')),
+    /Project path not found/
+  );
+  assert.equal(created, null, 'no tmux session may start for a dead path');
+});
+
+test('startFreshSession refuses a derived project path that does not exist', async () => {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-guard-'));
+  let created = null;
+  const mockController = {
+    hasSession: async () => false,
+    newSession: async (name, cwd, cmd) => { created = { name, cwd, cmd }; }
+  };
+  const manager = new ProjectManager(
+    path.join(tmpRoot, 'projects'), mockController, { hookSettingsPath: null }
+  );
+
+  try {
+    await assert.rejects(
+      () => manager.startFreshSession('ghost'),
+      /Project path not found/
+    );
+    assert.equal(created, null, 'no tmux session may start for a dead path');
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test('startFreshSession appends --settings pointing at the hook settings file', async () => {
   let created = [];
   const mockController = {
@@ -179,13 +250,17 @@ test('startFreshSession appends --settings pointing at the hook settings file', 
     setSessionOption: async () => {}
   };
 
-  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: '/tmp/hook-settings.json' });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-settings-'));
+  await fs.mkdir(path.join(tmpDir, 'web-backend'));
+  const manager = new ProjectManager(tmpDir, mockController, { hookSettingsPath: '/tmp/hook-settings.json' });
   await manager.startFreshSession('web-backend');
 
   assert.match(
     created[0].cmd,
     /--permission-mode bypassPermissions --settings "\/tmp\/hook-settings\.json"$/
   );
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 test('startFreshSession omits --settings when hook settings generation failed', async () => {
@@ -196,9 +271,13 @@ test('startFreshSession omits --settings when hook settings generation failed', 
     setSessionOption: async () => {}
   };
 
-  const manager = new ProjectManager('/tmp/projects', mockController, { hookSettingsPath: null });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-nosettings-'));
+  await fs.mkdir(path.join(tmpDir, 'web-backend'));
+  const manager = new ProjectManager(tmpDir, mockController, { hookSettingsPath: null });
   await manager.startFreshSession('web-backend');
   assert.ok(!created[0].cmd.includes('--settings'), `unexpected --settings in: ${created[0].cmd}`);
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 test('generateHookSettings writes settings that point at the hook script', () => {

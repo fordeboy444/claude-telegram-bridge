@@ -3,7 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { readOrcaProjects } from './orca_reader.js';
+import { readOrcaProjectsAuto } from './orca_reader.js';
 
 // Bridge repo root (src/projects/manager.js -> ../..). The SessionStart hook
 // script lives in <root>/hooks and is referenced by absolute path, because
@@ -56,7 +56,8 @@ export class ProjectManager {
   constructor(projectsDir, tmuxController, deps = {}) {
     this.projectsDir = projectsDir;
     this.controller = tmuxController;
-    this.orcaReader = deps.orcaReader || readOrcaProjects;
+    // Default reader walks the live Orca SQLite store, then the legacy JSON.
+    this.orcaReader = deps.orcaReader || readOrcaProjectsAuto;
     this.cliExecutable = deps.cliExecutable
       ?? (String(tmuxController?.tmuxPath || '').includes('wsl') ? 'claude.exe' : 'claude');
     // String = use as-is; null = launch without --settings; undefined = generate
@@ -120,6 +121,12 @@ export class ProjectManager {
   async startFreshSession(projectName, projectPath) {
     const sessionName = sessionNameFor(projectName);
     const resolvedPath = projectPath || path.join(this.projectsDir, projectName);
+
+    // tmux `new-session -c <missing dir>` does not fail; it starts the pane in
+    // the caller's cwd (/app). Refuse here so a dead project path is visible.
+    if (!fsSync.existsSync(resolvedPath)) {
+      throw new Error(`Project path not found: ${resolvedPath}`);
+    }
 
     if (await this.controller.hasSession(sessionName)) {
       await this.controller.killSession(sessionName);

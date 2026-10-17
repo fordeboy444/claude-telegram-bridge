@@ -1,7 +1,53 @@
 // Shared test helpers: fixtures and stub factories used across test files.
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
+// Where the reader looks for Orca's profile on this platform: %APPDATA%\Orca
+// on Windows, XDG_CONFIG_HOME-or-~/.config/orca elsewhere. Tests point the
+// matching env var at a temp root, so both sides must use the same spelling.
+export function orcaConfigDirUnder(root) {
+  return process.platform === 'win32'
+    ? path.join(root, 'Orca')
+    : path.join(root, 'orca');
+}
+
+// Write an Orca live profile store (profile-state.db) under a temp config
+// root, mirroring the real schema: one JSON payload per domain. Returns the
+// db path.
+export function writeOrcaProfileStateDb(root, domains) {
+  const profileDir = path.join(orcaConfigDirUnder(root), 'profiles', 'local-default');
+  fsSync.mkdirSync(profileDir, { recursive: true });
+  const dbPath = path.join(profileDir, 'profile-state.db');
+  const db = new DatabaseSync(dbPath);
+  db.exec(`CREATE TABLE profile_state_documents (
+    domain TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL,
+    domain_version INTEGER NOT NULL, revision INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL, content_hash TEXT NOT NULL
+  )`);
+  const stmt = db.prepare(
+    'INSERT INTO profile_state_documents (domain, payload, domain_version, revision, updated_at, content_hash) VALUES (?, ?, 1, 1, 1, ?)'
+  );
+  for (const [domain, payload] of Object.entries(domains)) {
+    stmt.run(domain, JSON.stringify(payload), 'hash');
+  }
+  db.close();
+  return dbPath;
+}
+
+// Point the platform's Orca config env var at a temp root and return a
+// restore function. Keeps each test's env mutation contained.
+export function useOrcaConfigRoot(root) {
+  const key = process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME';
+  const previous = process.env[key];
+  process.env[key] = root;
+  return () => {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  };
+}
 
 // Write a minimal SKILL.md into <root>/<folderName>/ as scanSkills expects it.
 export async function makeSkill(root, folderName, name, description = 'A test skill') {
