@@ -39,8 +39,9 @@ export function targetLabel(target) {
 }
 
 // A tmux answer. The controller reports no byte count, and a tmux key always
-// lands.
-const tmuxResult = { accepted: true, bytesWritten: 0 };
+// lands. Frozen: four call paths return this object by reference, so one
+// caller must never be able to edit the answer the next caller receives.
+const tmuxResult = Object.freeze({ accepted: true, bytesWritten: 0 });
 
 /**
  * The IO layer both transports hide behind.
@@ -113,18 +114,32 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
     return tmux.getSessionOption(target.sessionName, '@claude_session_id');
   }
 
+  // Only a live, connected tab is alive. `listAgentTabs` skips `connected !==
+  // true` already, so this layer must not call a dropped tab alive.
   async function isAlive(target) {
-    if (target.kind === 'tmux') return Boolean(await tmux.hasSession(target.sessionName));
-    const terminals = await orca.list();
-    return terminals.some((t) => t && t.handle === target.handle);
+    // isAlive is polled on every tick. A transport failure answers "not alive"
+    // instead of throwing, exactly like the tmux `hasSession` probe does.
+    try {
+      if (target.kind === 'tmux') return Boolean(await tmux.hasSession(target.sessionName));
+      const terminals = await orca.list();
+      const found = terminals.find((t) => t && t.handle === target.handle);
+      return Boolean(found && found.connected !== false);
+    } catch {
+      return false;
+    }
   }
 
   // 'working' | 'idle' | null. A tmux session has no cheap probe: the reader's
   // events drive the typing indicator there.
   async function status(target) {
     if (target.kind === 'tmux') return null;
-    const answer = await orca.agentStatus(target.handle);
-    return answer?.status ?? null;
+    // An unreadable status is unknown, which is the same answer as null.
+    try {
+      const answer = await orca.agentStatus(target.handle);
+      return answer?.status ?? null;
+    } catch {
+      return null;
+    }
   }
 
   return { sendText, sendKeys, interrupt, getBoundSessionId, isAlive, status };

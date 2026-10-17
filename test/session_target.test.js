@@ -84,10 +84,13 @@ test('sendKeys on a tmux target does not touch Orca', async () => {
   const orca = makeOrcaMock();
   const io = createSessionIo({ tmux, orca });
 
-  await io.sendKeys(aTmuxTarget(), ['Down', 'Space', 'Right', 'Enter']);
+  const result = await io.sendKeys(aTmuxTarget(), ['Down', 'Space', 'Right', 'Enter']);
 
   // tmux takes key NAMES, not bytes: the layer never maps a name here.
   assert.deepEqual(calls, [[SESSION, ['Down', 'Space', 'Right', 'Enter'], 300]]);
+  // The controller reports no byte count, so the answer is the shared frozen
+  // object; a caller must not be able to edit it for the next caller.
+  assert.deepEqual(result, { accepted: true, bytesWritten: 0 });
   assert.deepEqual(orca.calls, []);
 });
 
@@ -262,6 +265,28 @@ test('isAlive is true for an Orca target in terminal.list', async () => {
   assert.equal(await io.isAlive(anOrcaTarget()), true);
 });
 
+test('isAlive is false for an Orca target whose terminal is disconnected', async () => {
+  // A tab that is present but disconnected cannot take input. listAgentTabs
+  // already drops it, so the IO layer must agree.
+  const orca = makeOrcaMock({ terminals: [{ handle: 'term_a', connected: false }] });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), false);
+});
+
+test('isAlive answers false when the Orca transport fails', async () => {
+  // isAlive is polled on every tick. A dead socket must answer "not alive",
+  // never throw: a throw here would break the tick that detects a dead session.
+  const orca = {
+    list: async () => { throw new Error('Orca is not running'); },
+    agentStatus: async () => ({ isRunningAgent: false, status: null }),
+    send: async () => ({ handle: 'term_a', accepted: true, bytesWritten: 0 })
+  };
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), false);
+});
+
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
@@ -281,6 +306,18 @@ test('status reads agentStatus for an Orca target', async () => {
   const io = createSessionIo({ tmux: makeTmuxMock(), orca });
 
   assert.equal(await io.status(anOrcaTarget()), 'working');
+});
+
+test('status answers null when the Orca transport fails', async () => {
+  // An unknown status is null. A transport failure must read the same way.
+  const orca = {
+    list: async () => [],
+    agentStatus: async () => { throw new Error('Orca is not running'); },
+    send: async () => ({ handle: 'term_a', accepted: true, bytesWritten: 0 })
+  };
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.status(anOrcaTarget()), null);
 });
 
 // ---------------------------------------------------------------------------
