@@ -195,6 +195,10 @@ export function createBot(config, deps = {}) {
   // the existing callers (and the pre-target tests) keep working.
   async function switchActiveSession(target, chatId, projectPath) {
     const nextTarget = typeof target === 'string' ? tmuxTarget(target, projectPath ?? null) : target;
+    // The raw call sites pass proj.path (which can be undefined) straight to
+    // tmuxTarget, so normalise here: every target passes through this one
+    // place, and the record type promises string|null.
+    if (nextTarget) nextTarget.projectPath ??= null;
     const myEpoch = ++readerEpoch;
     stopTyping();
     if (activeSessionReader) {

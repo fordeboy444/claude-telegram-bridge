@@ -106,6 +106,26 @@ test('/interrupt routes through io.interrupt', async () => {
   api.stop();
 });
 
+test('a target built from an undefined project path still carries projectPath: null', async () => {
+  // The raw call sites in src/index.js hand proj.path straight to tmuxTarget,
+  // and proj.path can itself be undefined. switchActiveSession normalises it
+  // once, so the stored target honours the string|null contract of
+  // src/session/target.js and the key survives a JSON round trip.
+  const { api } = makeHarness();
+  const proj = { path: undefined };
+
+  await api.switchActiveSession(tmuxTarget(SESSION, proj.path), '111', proj.path);
+
+  const target = api.getActiveState().target;
+  assert.strictEqual(target.projectPath, null);
+  assert.ok('projectPath' in target);
+  // JSON.stringify drops an undefined value, which would hide the key from
+  // the Orca-path work that reads this field.
+  assert.ok('projectPath' in JSON.parse(JSON.stringify(target)));
+
+  api.stop();
+});
+
 test('a command with no active target answers the not-connected message', async () => {
   const { bot, api, calls } = makeHarness();
 
