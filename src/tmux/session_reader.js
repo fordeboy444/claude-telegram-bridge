@@ -73,6 +73,8 @@ export class ClaudeSessionReader {
   constructor(options = {}) {
     this.claudeHome = options.claudeHome || path.join(os.homedir(), '.claude');
     this.sessionId = options.sessionId || null;
+    this.sessionFile = null; // the transcript this reader follows, once started
+    this._pinned = false; // start() pinned this reader to one transcript file
     this.lastFileOffsets = new Map(); // filePath -> byte offset
     this.pollingTimer = null;
     this._stopped = false;
@@ -98,7 +100,13 @@ export class ClaudeSessionReader {
   // sessionId is set, else the newest transcript in the project dir (legacy).
   // The bound path is returned even when the file does not exist yet: claude
   // creates it on first write, and readNewEvents returns [] until then.
+  // A pinned reader returns the pinned path immediately — including null, which
+  // means "the joined target has not written its transcript yet". A pin never
+  // falls through to newest-file mode, or it would drift to another tab's file.
   async resolveSessionFile(projectPath) {
+    if (this._pinned) {
+      return this.sessionFile;
+    }
     if (!this.sessionId) {
       return this.findLatestSessionFile(projectPath);
     }
@@ -189,12 +197,19 @@ export class ClaudeSessionReader {
     let trackedFile = null;
     let tickCount = 0;
     const getBoundSessionId = options.getBoundSessionId || null;
+    const getSessionFile = typeof options.getSessionFile === 'function' ? options.getSessionFile : null;
+    // A joined Orca tab pins ONE transcript. Either option being present pins
+    // the reader: options.sessionFile is the initial path (null is valid and
+    // means "not written yet"), getSessionFile re-pins on a later tick.
+    this._pinned = options.sessionFile !== undefined || getSessionFile !== null;
+    this.sessionFile = this._pinned ? (options.sessionFile ?? null) : null;
 
     // Initialize offset to current size so we only read future events if file already exists
     this.resolveSessionFile(projectPath).then(async file => {
       if (this._stopped) return; // stop() raced the initial file resolution
       if (file) {
         trackedFile = file;
+        this.sessionFile = file;
         try {
           const stat = await fs.stat(file);
           this.lastFileOffsets.set(file, stat.size);
@@ -204,25 +219,50 @@ export class ClaudeSessionReader {
       this.pollingTimer = setInterval(async () => {
         try {
           // Every 5th poll tick: check whether /clear, /resume or /branch
-          // moved us to a new Claude session id inside the same tmux pane.
+          // moved us to a new Claude session id inside the same tmux pane,
+          // and whether a joined target re-pinned us to another transcript.
           // The SessionStart hook publishes the id onto the tmux session.
-          if (getBoundSessionId && ++tickCount % 5 === 0) {
-            let boundId = null;
-            try {
-              boundId = await getBoundSessionId();
-            } catch {
-              boundId = null; // option not set / tmux down: keep current binding
+          if ((getBoundSessionId || getSessionFile) && ++tickCount % 5 === 0) {
+            if (getBoundSessionId) {
+              let boundId = null;
+              try {
+                boundId = await getBoundSessionId();
+              } catch {
+                boundId = null; // option not set / tmux down: keep current binding
+              }
+              if (boundId && boundId !== this.sessionId) {
+                this.sessionId = boundId;
+                const newFile = await this.resolveSessionFile(projectPath);
+                if (newFile) {
+                  trackedFile = newFile;
+                  this.sessionFile = newFile;
+                  try {
+                    const stat = await fs.stat(newFile);
+                    this.lastFileOffsets.set(newFile, stat.size); // adopt from now, no replay
+                  } catch {
+                    this.lastFileOffsets.set(newFile, 0); // file appears later, read from start
+                  }
+                }
+              }
             }
-            if (boundId && boundId !== this.sessionId) {
-              this.sessionId = boundId;
-              const newFile = await this.resolveSessionFile(projectPath);
-              if (newFile) {
-                trackedFile = newFile;
+
+            if (getSessionFile) {
+              let pinnedFile = null;
+              try {
+                pinnedFile = await getSessionFile();
+              } catch {
+                pinnedFile = null; // probe failed: leave the current pin untouched
+              }
+              // A null result keeps the current pin. A new path is adopted at its
+              // CURRENT size, so records already in it are never replayed.
+              if (pinnedFile && pinnedFile !== this.sessionFile) {
+                this.sessionFile = pinnedFile;
+                trackedFile = pinnedFile;
                 try {
-                  const stat = await fs.stat(newFile);
-                  this.lastFileOffsets.set(newFile, stat.size); // adopt from now, no replay
+                  const stat = await fs.stat(pinnedFile);
+                  this.lastFileOffsets.set(pinnedFile, stat.size);
                 } catch {
-                  this.lastFileOffsets.set(newFile, 0); // file appears later, read from start
+                  this.lastFileOffsets.delete(pinnedFile); // missing: read it in full when it appears
                 }
               }
             }
@@ -230,6 +270,7 @@ export class ClaudeSessionReader {
 
           // With a bound sessionId the resolved path is constant (no flipping);
           // the fallback still follows the newest file for legacy sessions.
+          // A pinned reader resolves to its pin, so this never flips either.
           const currentLatest = await this.resolveSessionFile(projectPath);
           if (currentLatest && currentLatest !== trackedFile) {
             trackedFile = currentLatest;
@@ -237,6 +278,7 @@ export class ClaudeSessionReader {
               this.lastFileOffsets.set(trackedFile, 0);
             }
           }
+          this.sessionFile = currentLatest;
 
           const events = await this.readNewEvents(projectPath);
           for (const ev of events) {

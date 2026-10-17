@@ -344,6 +344,194 @@ test('ClaudeSessionReader re-binds to the new session id after /clear', async ()
   assert.ok(received.some(e => e.content === 'Post-hop reply.'), 'streaming resumed on the new transcript');
 });
 
+test('ClaudeSessionReader uses a pinned sessionFile and never re-resolves it', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-pin-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-pin');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+
+  // The joined tab owns this transcript; it exists and is empty at join time.
+  const pinnedFile = path.join(projectsDir, 'joined-tab.jsonl');
+  await fs.writeFile(pinnedFile, '');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const received = [];
+  reader.start(projectPath, (ev) => received.push(ev), 10, { sessionFile: pinnedFile });
+
+  // Run at least 10 ticks, then a NEWER transcript appears in the same dir.
+  await new Promise(r => setTimeout(r, 150));
+  const otherFile = path.join(projectsDir, 'other-tab.jsonl');
+  await fs.writeFile(otherFile, line('Other tab reply.'));
+  const now = Date.now();
+  await fs.utimes(otherFile, now / 1000 + 10, now / 1000 + 10);
+  await new Promise(r => setTimeout(r, 150));
+
+  await fs.appendFile(pinnedFile, line('Pinned tab reply.'));
+  await new Promise(r => setTimeout(r, 150));
+  reader.stop();
+
+  assert.equal(reader.sessionFile, pinnedFile, 'the pin never drifts to the newer file');
+  assert.ok(received.some(e => e.content === 'Pinned tab reply.'), 'the pinned file still streams');
+  assert.ok(!received.some(e => e.content === 'Other tab reply.'), 'the newer transcript is not read');
+});
+
+test('ClaudeSessionReader keeps a null pin and never falls through to newest-file mode', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-pin-null-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-pin-null');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const received = [];
+  let target = null; // the joined tab has not written its transcript yet
+  reader.start(projectPath, (ev) => received.push(ev), 10, {
+    sessionFile: null,
+    getSessionFile: () => target
+  });
+
+  // Other tabs keep writing in the same project dir.
+  const otherFile = path.join(projectsDir, 'other-tab.jsonl');
+  await fs.writeFile(otherFile, line('Another tab reply.'));
+  const now = Date.now();
+  await fs.utimes(otherFile, now / 1000 + 10, now / 1000 + 10);
+  await new Promise(r => setTimeout(r, 150));
+
+  assert.equal(reader.sessionFile, null, 'a null pin stays null');
+  assert.equal(received.length, 0, 'another tab transcript is never read');
+
+  // The joined tab writes at last: the re-pin tick adopts it at current size.
+  const joinedFile = path.join(projectsDir, 'joined-tab.jsonl');
+  await fs.writeFile(joinedFile, line('Written before the re-pin.'));
+  target = joinedFile;
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal(reader.sessionFile, joinedFile, 'the pin is adopted once it appears');
+  assert.ok(!received.some(e => e.content === 'Written before the re-pin.'), 'no replay of the adopted file');
+
+  await fs.appendFile(joinedFile, line('Turn after the re-pin.'));
+  await new Promise(r => setTimeout(r, 150));
+  reader.stop();
+
+  assert.ok(received.some(e => e.content === 'Turn after the re-pin.'), 'streaming follows the adopted pin');
+});
+
+test('ClaudeSessionReader seeks to the end of a pinned file and does not replay', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-pin-end-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-pin-end');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+
+  const pinnedFile = path.join(projectsDir, 'joined-tab.jsonl');
+  // History written before the join must never be replayed.
+  await fs.writeFile(pinnedFile, line('Old turn 1.') + line('Old turn 2.') + line('Old turn 3.'));
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const received = [];
+  reader.start(projectPath, (ev) => received.push(ev), 10, { sessionFile: pinnedFile });
+
+  // Three or more polls: still nothing.
+  await new Promise(r => setTimeout(r, 120));
+  assert.equal(received.length, 0, 'pre-existing records are not replayed');
+
+  // New lines from the pinned file do arrive.
+  await fs.appendFile(pinnedFile, line('New turn.'));
+  await new Promise(r => setTimeout(r, 120));
+  reader.stop();
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].content, 'New turn.');
+});
+
+test('ClaudeSessionReader re-pins to a new file and adopts it at its current size', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-repin-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-repin');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+
+  const fileA = path.join(projectsDir, 'tab-a.jsonl');
+  const fileB = path.join(projectsDir, 'tab-b.jsonl');
+  await fs.writeFile(fileA, '');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const received = [];
+  let target = fileA;
+  reader.start(projectPath, (ev) => received.push(ev), 10, { getSessionFile: () => target });
+
+  await new Promise(r => setTimeout(r, 80));
+  assert.equal(reader.sessionFile, fileA, 'the callback pin is adopted');
+
+  // The target record names another tab whose transcript already has content.
+  await fs.writeFile(fileB, line('Tab B old turn 1.') + line('Tab B old turn 2.'));
+  target = fileB;
+
+  // The re-pin runs on every 5th tick (50ms here).
+  await new Promise(r => setTimeout(r, 250));
+  assert.equal(reader.sessionFile, fileB, 'the reader re-pinned to the new file');
+  assert.ok(!received.some(e => e.content === 'Tab B old turn 1.'), 'no replay of tab B history');
+  assert.ok(!received.some(e => e.content === 'Tab B old turn 2.'), 'no replay of tab B history');
+
+  await fs.appendFile(fileB, line('Tab B new turn.'));
+  await new Promise(r => setTimeout(r, 120));
+  reader.stop();
+
+  assert.ok(received.some(e => e.content === 'Tab B new turn.'), 'streaming follows the re-pin');
+});
+
+test('ClaudeSessionReader still works with no sessionFile at all', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-nopin-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-nopin');
+  const slug = getProjectSlug(projectPath);
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+
+  const line = (text) => JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text }] }
+  }) + '\n';
+
+  const firstFile = path.join(projectsDir, 'session-first.jsonl');
+  await fs.writeFile(firstFile, line('First transcript turn.'));
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const received = [];
+  reader.start(projectPath, (ev) => received.push(ev), 10);
+
+  // No pin: the newest transcript in the directory is still followed.
+  await new Promise(r => setTimeout(r, 120));
+  const newerFile = path.join(projectsDir, 'session-newest.jsonl');
+  await fs.writeFile(newerFile, line('Newest transcript turn.'));
+  const now = Date.now();
+  await fs.utimes(newerFile, now / 1000 + 10, now / 1000 + 10);
+
+  await new Promise(r => setTimeout(r, 150));
+  reader.stop();
+
+  assert.ok(received.some(e => e.content === 'Newest transcript turn.'), 'newest-file mode is unchanged');
+});
+
 test('ClaudeSessionReader keeps the current binding when getBoundSessionId fails', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-hopfail-'));
   const projectPath = path.resolve(tmpDir, 'test-project-hopfail');
