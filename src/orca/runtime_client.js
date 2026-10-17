@@ -96,13 +96,13 @@ export function rpcOnce({
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      socket.removeListener('data', onData);
-      socket.removeListener('error', onError);
-      socket.removeListener('close', onClose);
-      // Every request opens its own socket, so the connection has no further
-      // use once the reply is in. destroy() releases the fd even if Orca keeps
-      // its half of the connection open.
+      // destroy() runs BEFORE the listeners drop. A late 'error' with no listener
+      // attached is unhandled and kills the daemon. The 'error' listener stays on
+      // the socket for its remaining life; the `settled` guard above absorbs the
+      // re-entry it produces.
       socket.destroy();
+      socket.removeListener('data', onData);
+      socket.removeListener('close', onClose);
       settle(value);
     };
 
@@ -153,7 +153,15 @@ export function rpcOnce({
       finish(reject, new OrcaRpcError(`Orca did not answer ${method}`, { method, code: 'timeout' }));
     }, timeoutMs);
 
-    socket.write(JSON.stringify({ id, authToken, method, params }) + '\n');
+    try {
+      socket.write(JSON.stringify({ id, authToken, method, params }) + '\n');
+    } catch (cause) {
+      finish(reject, new OrcaRpcError(`Orca write failed on ${method}`, {
+        method,
+        code: 'socket_error',
+        cause
+      }));
+    }
   });
 }
 

@@ -53,7 +53,7 @@ export async function listAgentTabs(client) {
     try {
       probe = await client.agentStatus(handle);
     } catch (err) {
-      console.warn('⚠️ Orca tab probe failed (' + handle + '):', err.message);
+      console.warn('⚠️ Orca tab probe failed (' + handle + '):', err?.message ?? String(err));
       continue;
     }
     if (probe?.isRunningAgent !== true) continue;

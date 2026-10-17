@@ -171,6 +171,45 @@ test('rpcOnce rejects on timeout and destroys the socket', async () => {
   assert.equal(destroyed, true);
 });
 
+test('rpcOnce rejects with socket_error when socket.write throws synchronously', async () => {
+  const sock = new EventEmitter();
+  sock.write = () => { throw new Error('EPIPE'); };
+  sock.destroy = () => {};
+  sock.end = () => {};
+
+  await assert.rejects(
+    () => rpcOnce({
+      connect: () => sock,
+      socketPath: '/tmp/orca.sock',
+      authToken: 'TOK',
+      id: '1',
+      method: 'terminal.list'
+    }),
+    (e) => e instanceof OrcaRpcError &&
+      e.code === 'socket_error' &&
+      e.method === 'terminal.list' &&
+      e.cause?.message === 'EPIPE'
+  );
+});
+
+test('a socket error after the reply resolves is absorbed', async () => {
+  const sock = makeFakeSocket(OK);
+
+  const result = await rpcOnce({
+    connect: () => sock,
+    socketPath: '/tmp/orca.sock',
+    authToken: 'TOK',
+    id: '1',
+    method: 'terminal.list'
+  });
+  assert.deepEqual(result, { terminals: [] });
+
+  // With no 'error' listener attached an EventEmitter rethrows, and an
+  // unhandled 'error' event kills the daemon.
+  assert.doesNotThrow(() => sock.emit('error', new Error('ECONNRESET')));
+  assert.deepEqual(result, { terminals: [] });
+});
+
 test('rpcOnce skips a line with another id and resolves on the matching one', async () => {
   const sock = new EventEmitter();
   sock.written = [];
