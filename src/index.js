@@ -15,8 +15,9 @@ import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
 import { gatherDiagnostics, formatDiagnosticsMessage } from './diagnostics.js';
 import { gatherSessionStatus, formatStatusMessage } from './status_report.js';
 import { sendWithFallback } from './utils/messenger.js';
-import { tmuxTarget, targetLabel, createSessionIo } from './session/target.js';
+import { tmuxTarget, orcaTarget, targetLabel, createSessionIo } from './session/target.js';
 import { OrcaRuntimeClient, DEFAULT_RUNTIME_JSON_PATH } from './orca/runtime_client.js';
+import { listAgentTabs, resolveTranscript } from './orca/terminals.js';
 
 // If the daemon is launched from inside a Claude Code session (e.g. restarted
 // by an agent), CLAUDE_CODE_CHILD_SESSION leaks down the wsl.exe -> tmux ->
@@ -59,6 +60,60 @@ export function createBot(config, deps = {}) {
   // epoch and drop events when a newer switch has superseded them, so a
   // racing old reader can never fire stale events into the new session.
   let readerEpoch = 0;
+
+  // The agent tabs that belong to ONE project. The repo id is the stable link:
+  // a worktree path changes, an id does not. A project record with no id yet
+  // (the legacy JSON store) falls back to the path.
+  async function listProjectTabs(project) {
+    const tabs = await listAgentTabs(orcaClient);
+    const repoIds = Array.isArray(project?.repoIds) ? project.repoIds : [];
+    if (repoIds.length > 0) {
+      return tabs.filter(tab => tab.repoId !== null && repoIds.includes(tab.repoId));
+    }
+    return tabs.filter(tab => tab.projectPath === project?.path);
+  }
+
+  // Telegram caps callback_data at 64 bytes, so an orca_tab: callback carries
+  // the handle alone. Remember which project rendered each row, so a tap on a
+  // tab that has since closed can still re-render that project's card.
+  const tabProjectNames = new Map();
+
+  // One list of tabs per render, and never a throw: a down Orca must not break
+  // /projects. The card simply loses its tab section, and one plain line names
+  // the fault (spec §8 B2 — a stale socket and a missing runtime file are the
+  // same event to the reader).
+  async function tabsForProject(ctx, project) {
+    let tabs;
+    try {
+      tabs = await listProjectTabs(project);
+    } catch (err) {
+      await sendWithFallback(
+        bot,
+        ctx.chat.id,
+        `⚪ Orca is not available: ${err?.message ?? String(err)}`
+      );
+      return [];
+    }
+    for (const tab of tabs) tabProjectNames.set(tab.handle, project.name);
+    return tabs;
+  }
+
+  // The card the user tapped, drawn again from live data. The remembered
+  // project name is the only route back: the callback data holds one handle.
+  async function rerenderProjectCard(ctx, handle) {
+    const projectName = tabProjectNames.get(handle);
+    tabProjectNames.delete(handle);
+    const projects = await projectManager.listProjects();
+    const proj = projects.find(p => p.name === projectName);
+    const view = proj
+      ? buildProjectActionView(proj, await tabsForProject(ctx, proj))
+      : buildProjectsMenu(projects);
+    try {
+      await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
+    } catch (err) {
+      console.warn('⚠️ Project card refresh failed:', err.message);
+    }
+  }
 
   function startTyping(chatId) {
     if (!chatId) return;
@@ -238,6 +293,26 @@ export function createBot(config, deps = {}) {
       // the newer reader.
       if (myEpoch !== readerEpoch) return;
 
+      // An Orca tab publishes no session id, so it pins its own transcript
+      // file instead. `?? null` is a real value here: the reader reads
+      // undefined as "no pin given" and then follows the newest file in the
+      // project dir, which can be another tab's session. The pin AND the
+      // callback are both required — the callback alone leaves the reader
+      // silent for the first five ticks, and the pin alone cannot follow a
+      // /clear inside the tab.
+      const readerOptions = nextTarget.kind === 'orca'
+        ? {
+            sessionFile: nextTarget.transcriptFile ?? null,
+            getSessionFile: () => resolveTranscript(nextTarget, { claudeHome: config.claudeHome })
+          }
+        : {
+            sessionId,
+            // After /clear, /resume or /branch the CLI starts a new session id;
+            // the SessionStart hook publishes it on the tmux session and the
+            // reader re-binds every 5th poll tick (closure over this target).
+            getBoundSessionId: () => io.getBoundSessionId(nextTarget)
+          };
+
       activeSessionReader = new SessionReaderClass({ claudeHome: config.claudeHome });
       activeSessionReader.start(
         resolvedProjectPath,
@@ -274,13 +349,7 @@ export function createBot(config, deps = {}) {
           }
         },
         config.pollIntervalMs,
-        {
-          sessionId,
-          // After /clear, /resume or /branch the CLI starts a new session id;
-          // the SessionStart hook publishes it on the tmux session and the
-          // reader re-binds every 5th poll tick (closure over this target).
-          getBoundSessionId: () => io.getBoundSessionId(nextTarget)
-        }
+        readerOptions
       );
     }
   }
@@ -504,9 +573,45 @@ export function createBot(config, deps = {}) {
     }
 
     // Keep rendering the card so End Session stays reachable after entering.
-    const view = buildProjectActionView(proj);
+    const view = buildProjectActionView(proj, await tabsForProject(ctx, proj));
     await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
   });
+
+  // Tap a tab row: make it the active target, exactly like a tmux session.
+  // The callback data carries the handle only, so the tab is looked up again
+  // here — the card can be minutes old by the time it is tapped.
+  bot.action(/^orca_tab:(term_[A-Za-z0-9-]+)$/, (ctx) => runActionHandler(ctx, async (ctx) => {
+    const handle = ctx.match[1];
+    const tab = (await listAgentTabs(orcaClient)).find(t => t.handle === handle);
+
+    if (!tab) {
+      await ctx.answerCbQuery('Tab closed').catch(() => {});
+      await sendWithFallback(bot, ctx.chat.id, '🛑 That tab is no longer open.');
+      await rerenderProjectCard(ctx, handle);
+      return;
+    }
+
+    const target = orcaTarget({
+      handle: tab.handle,
+      title: tab.cleanTitle,
+      projectPath: tab.projectPath,
+      transcriptFile: await resolveTranscript(tab, { claudeHome: config.claudeHome })
+    });
+
+    // Switch first: the target must be live before the confirmation lands, or
+    // a reply typed straight after the join would go to the old session.
+    await switchActiveSession(target, ctx.chat.id, tab.projectPath);
+    if (tab.status === 'working') startTyping(ctx.chat.id);
+
+    await ctx.answerCbQuery(`Joined ${tab.cleanTitle}`).catch(() => {});
+    // One message, and no history: the reader adopts the transcript at its
+    // current size, so earlier turns are never replayed (G6).
+    await sendWithFallback(
+      bot,
+      ctx.chat.id,
+      `🔗 *Joined:* ${tab.cleanTitle}\n_Send a message to continue. Earlier messages are not shown._`
+    );
+  }));
 
   bot.action(/proj_start:(.+)/, (ctx) => runActionHandler(ctx, async (ctx) => {
     const projectName = ctx.match[1];
@@ -544,7 +649,7 @@ export function createBot(config, deps = {}) {
       p => p.name === projectName || p.displayName === projectName
     );
     if (fresh) {
-      const view = buildProjectActionView(fresh);
+      const view = buildProjectActionView(fresh, await tabsForProject(ctx, fresh));
       await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
     }
     await ctx.reply(
@@ -601,7 +706,7 @@ export function createBot(config, deps = {}) {
       p => p.name === projectName || p.displayName === projectName
     );
     if (fresh) {
-      const view = buildProjectActionView(fresh);
+      const view = buildProjectActionView(fresh, await tabsForProject(ctx, fresh));
       try {
         await ctx.editMessageText(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
       } catch (err) {
@@ -804,12 +909,19 @@ export function createBot(config, deps = {}) {
     lastInjectedPrompt = injectText;
     lastInjectedTime = Date.now();
     startTyping(ctx.chat.id);
-    await io.sendText(activeTarget, injectText, true);
+    const answer = await io.sendText(activeTarget, injectText, true);
+    // A refusal is not an error: the tab is up but did not take the write, and
+    // bytesWritten is 0. Say so instead of leaving the indicator running.
+    if (!answer.accepted) {
+      stopTyping();
+      return ctx.reply('⚠️ The tab did not accept the input. Nothing was sent.');
+    }
   });
 
   return {
     bot,
     switchActiveSession,
+    listProjectTabs,
     refreshSkills,
     async attachExistingSession(chatId) {
       const sessions = await tmux.listSessions('claude-');
