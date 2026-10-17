@@ -76,6 +76,7 @@ export class ClaudeSessionReader {
     this.sessionFile = null; // the transcript this reader follows, once started
     this._pinned = false; // start() pinned this reader to one transcript file
     this.lastFileOffsets = new Map(); // filePath -> byte offset
+    this._reading = false; // a poll tick is in flight; hold the next one back
     this.pollingTimer = null;
     this._stopped = false;
   }
@@ -217,6 +218,11 @@ export class ClaudeSessionReader {
       }
 
       this.pollingTimer = setInterval(async () => {
+        // A tick that does async I/O can outlast pollIntervalMs. Without this
+        // guard two ticks both read the same offset before either writes it,
+        // and the same records are emitted twice.
+        if (this._reading) return;
+        this._reading = true;
         try {
           // Every 5th poll tick: check whether /clear, /resume or /branch
           // moved us to a new Claude session id inside the same tmux pane,
@@ -284,7 +290,10 @@ export class ClaudeSessionReader {
           for (const ev of events) {
             onEvent(ev);
           }
-        } catch {}
+        } catch {
+        } finally {
+          this._reading = false;
+        }
       }, pollIntervalMs);
       if (this.pollingTimer.unref) {
         this.pollingTimer.unref();
