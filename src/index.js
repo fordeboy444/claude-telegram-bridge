@@ -15,6 +15,8 @@ import { buildProjectsMenu, buildProjectActionView } from './projects/menu.js';
 import { gatherDiagnostics, formatDiagnosticsMessage } from './diagnostics.js';
 import { gatherSessionStatus, formatStatusMessage } from './status_report.js';
 import { sendWithFallback } from './utils/messenger.js';
+import { tmuxTarget, targetLabel, createSessionIo } from './session/target.js';
+import { OrcaRuntimeClient, DEFAULT_RUNTIME_JSON_PATH } from './orca/runtime_client.js';
 
 // If the daemon is launched from inside a Claude Code session (e.g. restarted
 // by an agent), CLAUDE_CODE_CHILD_SESSION leaks down the wsl.exe -> tmux ->
@@ -28,9 +30,18 @@ export function createBot(config, deps = {}) {
   const tmux = deps.tmux || new TmuxController(config.tmuxPath);
   const projectManager = deps.projectManager || new ProjectManager(config.projectsDir, tmux);
   const SessionReaderClass = deps.sessionReaderClass || ClaudeSessionReader;
+  // ONE Orca client per bot. The runtime client re-reads the socket path and the
+  // token on every request, so a long-lived client survives an Orca restart and
+  // no second client is ever needed.
+  const orcaClient = deps.orcaClient ??
+    new OrcaRuntimeClient({ runtimeJsonPath: deps.orcaRuntimeJsonPath ?? DEFAULT_RUNTIME_JSON_PATH });
+  // The only place that knows which transport a target uses. Everything below
+  // calls `io.*` and never asks.
+  const io = createSessionIo({ tmux, orca: orcaClient });
 
-  // State tracking
-  let activeSessionName = null;
+  // State tracking. The active target names where the session lives: a tmux
+  // session or an Orca agent tab.
+  let activeTarget = null;
   let activeChatId = null;
   let activeProjectPath = null;
   let activeSessionReader = null;
@@ -57,10 +68,10 @@ export function createBot(config, deps = {}) {
     }
     typingChatId = chatId;
     const sendTyping = async () => {
-      if (activeSessionName) {
+      if (activeTarget) {
         let alive = true;
         try {
-          alive = await tmux.hasSession(activeSessionName);
+          alive = await io.isAlive(activeTarget);
         } catch {
           alive = true;
         }
@@ -87,7 +98,7 @@ export function createBot(config, deps = {}) {
   // A dead tmux session must never receive injections or keep the typing
   // indicator alive. One path clears the connection and reports the death.
   async function notifySessionDeath(chatId) {
-    if (!activeSessionName) return; // already cleared: no double notification
+    if (!activeTarget) return; // already cleared: no double notification
     switchActiveSession(null, null, null); // stops typing + reader, clears connection
     if (chatId) {
       await sendWithFallback(bot, chatId, '🔴 Session ended. Use /projects.');
@@ -95,10 +106,10 @@ export function createBot(config, deps = {}) {
   }
 
   async function ensureSessionAlive(ctx) {
-    if (!activeSessionName) return true;
+    if (!activeTarget) return true;
     let alive = true;
     try {
-      alive = await tmux.hasSession(activeSessionName);
+      alive = await io.isAlive(activeTarget);
     } catch {
       alive = true; // cannot check: let the sendKeys path surface real errors
     }
@@ -156,7 +167,8 @@ export function createBot(config, deps = {}) {
       cwd: process.cwd(),
       home: os.homedir(),
       projectsDir: config.projectsDir,
-      activeSessionName,
+      // The scanner takes a tmux session NAME; only a tmux target has one.
+      activeSessionName: activeTarget?.kind === 'tmux' ? activeTarget.sessionName : null,
       projectPath: activeProjectPath
     });
     const scanned = await scanSkills(dirs);
@@ -179,7 +191,10 @@ export function createBot(config, deps = {}) {
   // Attach Whitelist Auth Guard
   bot.use(createAuthMiddleware(config.allowedUserIds));
 
-  async function switchActiveSession(sessionName, chatId, projectPath) {
+  // Argument 1 is a target record. A bare tmux session name is still accepted so
+  // the existing callers (and the pre-target tests) keep working.
+  async function switchActiveSession(target, chatId, projectPath) {
+    const nextTarget = typeof target === 'string' ? tmuxTarget(target, projectPath ?? null) : target;
     const myEpoch = ++readerEpoch;
     stopTyping();
     if (activeSessionReader) {
@@ -193,22 +208,23 @@ export function createBot(config, deps = {}) {
     activeQuestion = null;
     pendingArgsSkill = null;
 
-    activeSessionName = sessionName;
+    activeTarget = nextTarget;
     activeChatId = chatId;
     // Real Orca worktree paths differ from projectsDir/<name>; projectNameFromSession
     // cannot invert normalizeName, so the passed projectPath is authoritative for
-    // both the reader and the skills scans. A null session clears it.
-    const resolvedProjectPath = projectPath || path.join(config.projectsDir, projectNameFromSession(sessionName));
-    activeProjectPath = sessionName ? resolvedProjectPath : null;
+    // both the reader and the skills scans. A null target clears it.
+    const resolvedProjectPath = projectPath
+      || path.join(config.projectsDir, projectNameFromSession(nextTarget?.sessionName));
+    activeProjectPath = nextTarget ? resolvedProjectPath : null;
 
-    if (sessionName && chatId) {
+    if (nextTarget && chatId) {
       refreshSkills().catch(err => console.warn('⚠️ Skill refresh failed:', err.message));
 
-      // Bind the reader to this tmux session's own transcript. Sessions
-      // launched before session binding have no option -> null -> newest-file fallback.
+      // Bind the reader to this target's own transcript. Sessions launched
+      // before session binding have no option -> null -> newest-file fallback.
       let sessionId = null;
       try {
-        sessionId = await tmux.getSessionOption(sessionName, '@claude_session_id');
+        sessionId = await io.getBoundSessionId(nextTarget);
       } catch {
         sessionId = null;
       }
@@ -258,8 +274,8 @@ export function createBot(config, deps = {}) {
           sessionId,
           // After /clear, /resume or /branch the CLI starts a new session id;
           // the SessionStart hook publishes it on the tmux session and the
-          // reader re-binds every 5th poll tick (closure over this session).
-          getBoundSessionId: () => tmux.getSessionOption(sessionName, '@claude_session_id')
+          // reader re-binds every 5th poll tick (closure over this target).
+          getBoundSessionId: () => io.getBoundSessionId(nextTarget)
         }
       );
     }
@@ -295,25 +311,25 @@ export function createBot(config, deps = {}) {
   });
 
   bot.command('status', async (ctx) => {
-    if (!activeSessionName) {
+    if (!activeTarget) {
       return ctx.reply('⚪ *No active session.* Use /projects to start one.', { parse_mode: 'Markdown' });
     }
     let exists = true;
     try {
-      exists = await tmux.hasSession(activeSessionName);
+      exists = await io.isAlive(activeTarget);
     } catch {
       exists = true; // cannot check: let the gather step surface real errors
     }
 
     const legacyLine = (note = '') => {
-      const text = `🎯 *Active Session:* \`${activeSessionName}\` (${exists ? '🟢 Online' : '🔴 Terminated'})`;
+      const text = `🎯 *Active Session:* \`${targetLabel(activeTarget)}\` (${exists ? '🟢 Online' : '🔴 Terminated'})`;
       return ctx.reply(note ? `${text}\n⚠️ ${note}` : text, { parse_mode: 'Markdown' });
     };
 
     // Read the session id fresh so dashboard data follows /clear hops.
     let sessionId = null;
     try {
-      sessionId = await tmux.getSessionOption(activeSessionName, '@claude_session_id');
+      sessionId = await io.getBoundSessionId(activeTarget);
     } catch {
       sessionId = null;
     }
@@ -324,12 +340,12 @@ export function createBot(config, deps = {}) {
     try {
       const status = await gatherSessionStatus({
         claudeHome: config.claudeHome,
-        projectPath: activeProjectPath || path.join(config.projectsDir, projectNameFromSession(activeSessionName)),
+        projectPath: activeProjectPath || path.join(config.projectsDir, projectNameFromSession(targetLabel(activeTarget))),
         sessionId,
         now: Date.now()
       });
       return ctx.reply(
-        formatStatusMessage({ sessionName: activeSessionName, alive: exists, status }),
+        formatStatusMessage({ sessionName: targetLabel(activeTarget), alive: exists, status }),
         { parse_mode: 'Markdown' }
       );
     } catch (err) {
@@ -344,14 +360,14 @@ export function createBot(config, deps = {}) {
   // fast presses trigger Claude Code's rewind feature. The send also cancels
   // an open question modal in the pane, so drop the Telegram card state.
   bot.command('interrupt', async (ctx) => {
-    if (!activeSessionName) {
+    if (!activeTarget) {
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
     if (!(await ensureSessionAlive(ctx))) return;
-    await tmux.sendKeysWithDelay(activeSessionName, ['Escape'], 0);
+    await io.interrupt(activeTarget);
     activeQuestion = null;
     stopTyping();
-    return ctx.reply(`🛑 Interrupt sent to \`${activeSessionName}\``, { parse_mode: 'Markdown' });
+    return ctx.reply(`🛑 Interrupt sent to \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
   });
 
   bot.command('projects', async (ctx) => {
@@ -374,7 +390,8 @@ export function createBot(config, deps = {}) {
       cwd: process.cwd(),
       home: os.homedir(),
       projectsDir: config.projectsDir,
-      activeSessionName,
+      // The diagnostics card still takes a tmux session NAME.
+      activeSessionName: activeTarget?.kind === 'tmux' ? activeTarget.sessionName : null,
       activeProjectPath,
       tmux
     });
@@ -414,15 +431,15 @@ export function createBot(config, deps = {}) {
     const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
-    if (!activeSessionName) {
+    if (!activeTarget) {
       await ctx.answerCbQuery().catch(() => {});
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
 
     startTyping(ctx.chat?.id);
-    await tmux.sendKeys(activeSessionName, skill.command, true);
+    await io.sendText(activeTarget, skill.command, true);
     await ctx.answerCbQuery(`Running ${skill.name}...`);
-    await ctx.reply(`⚡ Injected \`${skill.command}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
+    await ctx.reply(`⚡ Injected \`${skill.command}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
   }));
 
   bot.action(/skill_run_args:([0-9a-f]{8,12})/, (ctx) => runActionHandler(ctx, async (ctx) => {
@@ -441,16 +458,16 @@ export function createBot(config, deps = {}) {
     const skill = skillByHash.get(ctx.match[1]);
     if (!skill) return ctx.answerCbQuery('Skill not found');
 
-    if (!activeSessionName) {
+    if (!activeTarget) {
       await ctx.answerCbQuery().catch(() => {});
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
 
     const fullCmd = `${skill.command} ${ctx.match[2]}`;
     startTyping(ctx.chat?.id);
-    await tmux.sendKeys(activeSessionName, fullCmd, true);
+    await io.sendText(activeTarget, fullCmd, true);
     await ctx.answerCbQuery(`Running ${fullCmd}...`);
-    await ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
+    await ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
   }));
 
   bot.action('projects_list', async (ctx) => {
@@ -476,7 +493,7 @@ export function createBot(config, deps = {}) {
       // Teardown of the previous reader/question state happens inside
       // switchActiveSession; the fresh-start path stays available only when
       // no live session exists (or after End Session).
-      await switchActiveSession(preferred, ctx.chat.id, proj.path);
+      await switchActiveSession(tmuxTarget(preferred, proj.path), ctx.chat.id, proj.path);
       await ctx.answerCbQuery(`🔌 Entered ${preferred}`);
     } else {
       await ctx.answerCbQuery();
@@ -504,7 +521,7 @@ export function createBot(config, deps = {}) {
       if (await tmux.hasSession(s)) { live = s; break; }
     }
     if (live) {
-      await switchActiveSession(live, ctx.chat.id, proj ? proj.path : null);
+      await switchActiveSession(tmuxTarget(live, proj ? proj.path : null), ctx.chat.id, proj ? proj.path : null);
       await ctx.answerCbQuery(`▶️ Resumed ${live}`);
       await ctx.reply(
         `▶️ Resumed the \`${live}\` session (it was still running). End it first to start fresh.`,
@@ -515,7 +532,7 @@ export function createBot(config, deps = {}) {
 
     await ctx.answerCbQuery('Starting fresh session...');
     const sessionName = await projectManager.startFreshSession(projectName, proj ? proj.path : null);
-    await switchActiveSession(sessionName, ctx.chat.id, proj ? proj.path : null);
+    await switchActiveSession(tmuxTarget(sessionName, proj ? proj.path : null), ctx.chat.id, proj ? proj.path : null);
 
     // Re-render the action view so the user immediately sees Connect / Kill
     // (End Session) buttons instead of the stale Start Session button.
@@ -543,11 +560,12 @@ export function createBot(config, deps = {}) {
       return ctx.answerCbQuery('Session not running');
     }
 
-    const previous = activeSessionName;
-    await switchActiveSession(sessionName, ctx.chat.id, proj.path);
+    const previous = activeTarget;
+    await switchActiveSession(tmuxTarget(sessionName, proj.path), ctx.chat.id, proj.path);
     await ctx.answerCbQuery(`Connected to ${sessionName}`);
+    const previousLabel = previous ? targetLabel(previous) : null;
     await ctx.reply(
-      `🔌 Connected to ${sessionName}${previous && previous !== sessionName ? ` (was ${previous})` : ''}`
+      `🔌 Connected to ${sessionName}${previousLabel && previousLabel !== sessionName ? ` (was ${previousLabel})` : ''}`
     );
   });
 
@@ -555,11 +573,15 @@ export function createBot(config, deps = {}) {
     const projectName = ctx.match[1];
     // listProjects/killProjectSessions treat a project's sessions as
     // claude-<norm> and any claude-<norm>-<suffix> variant; the active
-    // connection must be cleared for both shapes.
+    // connection must be cleared for both shapes. Killing tmux sessions never
+    // clears an Orca tab target: that tab is not a tmux session.
     const targetPrefix = sessionNameFor(projectName);
     if (
-      activeSessionName === targetPrefix ||
-      activeSessionName.startsWith(`${targetPrefix}-`)
+      activeTarget?.kind === 'tmux' &&
+      (
+        activeTarget.sessionName === targetPrefix ||
+        activeTarget.sessionName.startsWith(`${targetPrefix}-`)
+      )
     ) {
       switchActiveSession(null, null, null);
     }
@@ -591,21 +613,21 @@ export function createBot(config, deps = {}) {
   // Enter on the review screen, Right on a question page. Returns false when
   // the modal stays open (keys lost or session dead). Aborts silently if a
   // NEW question appears: a new modal means the old one already closed.
-  async function ensureModalSubmitted(sessionName, counterAtStart) {
+  async function ensureModalSubmitted(target, counterAtStart) {
     for (let i = 0; i < 6; i++) {
       await new Promise(r => setTimeout(r, 600));
       if (questionEventCounter !== counterAtStart) return true;
       let pane = '';
       try {
-        pane = await tmux.capturePane(sessionName, -40);
+        pane = await tmux.capturePane(target.sessionName, -40);
       } catch {
         return false;
       }
       if (!pane.trim()) return false;
       if (/Submit answers/.test(pane)) {
-        await tmux.sendKeysWithDelay(sessionName, ['Enter'], 200);
+        await tmux.sendKeysWithDelay(target.sessionName, ['Enter'], 200);
       } else if (/Esc to cancel/.test(pane)) {
-        await tmux.sendKeysWithDelay(sessionName, ['Right'], 200);
+        await tmux.sendKeysWithDelay(target.sessionName, ['Right'], 200);
       } else {
         return true; // modal gone: submitted
       }
@@ -620,9 +642,9 @@ export function createBot(config, deps = {}) {
     startTyping(ctx.chat?.id);
 
     const keys = buildAnswerKeys(question.questions, question.answers);
-    await tmux.sendKeysWithDelay(activeSessionName, keys, 300);
+    await io.sendKeys(activeTarget, keys, 300);
 
-    const ok = await ensureModalSubmitted(activeSessionName, counterAtStart);
+    const ok = await ensureModalSubmitted(activeTarget, counterAtStart);
     if (ok) {
       await ctx.answerCbQuery('Submitted answers');
       await ctx.reply('📨 Answers submitted to Claude.');
@@ -665,7 +687,7 @@ export function createBot(config, deps = {}) {
     );
 
     if (allSingleChoice && allAnswered) {
-      if (!activeSessionName) {
+      if (!activeTarget) {
         return ctx.answerCbQuery('No active session');
       }
       if (!(await ensureSessionAlive(ctx))) return;
@@ -685,7 +707,7 @@ export function createBot(config, deps = {}) {
   });
 
   bot.action('submit_q', async (ctx) => {
-    if (!activeSessionName) {
+    if (!activeTarget) {
       return ctx.answerCbQuery('No active session');
     }
     if (!activeQuestion) {
@@ -715,13 +737,13 @@ export function createBot(config, deps = {}) {
     if (pendingArgsSkill) {
       const fullCommand = `${pendingArgsSkill.command} ${text}`;
       pendingArgsSkill = null;
-      if (!activeSessionName) {
+      if (!activeTarget) {
         return ctx.reply('⚠️ No active Claude session. Use /projects to start one.');
       }
       if (!(await ensureSessionAlive(ctx))) return;
       startTyping(ctx.chat.id);
-      await tmux.sendKeys(activeSessionName, fullCommand, true);
-      return ctx.reply(`⚡ Injected \`${fullCommand}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
+      await io.sendText(activeTarget, fullCommand, true);
+      return ctx.reply(`⚡ Injected \`${fullCommand}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
     }
 
     // Direct slash command execution (e.g. /clear, /npm_package_flow, /context7_cli, etc.)
@@ -733,7 +755,7 @@ export function createBot(config, deps = {}) {
       // Check if command matches our mapped commands
       const matchedSkill = commandMapping.get(cmdRaw.toLowerCase());
       if (matchedSkill) {
-        if (!activeSessionName) {
+        if (!activeTarget) {
           return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
         }
         if (!(await ensureSessionAlive(ctx))) return;
@@ -744,12 +766,12 @@ export function createBot(config, deps = {}) {
           return ctx.reply(view.text, { parse_mode: 'Markdown', reply_markup: view.reply_markup });
         }
         const fullCmd = args ? `${matchedSkill.command} ${args}` : matchedSkill.command;
-        await tmux.sendKeys(activeSessionName, fullCmd, true);
-        return ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${activeSessionName}\``, { parse_mode: 'Markdown' });
+        await io.sendText(activeTarget, fullCmd, true);
+        return ctx.reply(`⚡ Injected \`${fullCmd}\` into \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
       }
     }
 
-    if (!activeSessionName) {
+    if (!activeTarget) {
       // Auto-attach if an active tmux session exists
       const sessions = await tmux.listSessions('claude-');
       if (sessions.length > 1) {
@@ -767,7 +789,7 @@ export function createBot(config, deps = {}) {
       // Exactly one session: attach, then fall through so the triggering text is forwarded.
       const sessionName = sessions[0];
       const proj = await projectManager.findProjectBySession(sessionName);
-      await switchActiveSession(sessionName, ctx.chat.id, proj?.path);
+      await switchActiveSession(tmuxTarget(sessionName, proj?.path), ctx.chat.id, proj?.path);
       await ctx.reply(`🎯 Auto-connected to active session: \`${sessionName}\``, { parse_mode: 'Markdown' });
     }
 
@@ -778,7 +800,7 @@ export function createBot(config, deps = {}) {
     lastInjectedPrompt = injectText;
     lastInjectedTime = Date.now();
     startTyping(ctx.chat.id);
-    await tmux.sendKeys(activeSessionName, injectText, true);
+    await io.sendText(activeTarget, injectText, true);
   });
 
   return {
@@ -790,11 +812,13 @@ export function createBot(config, deps = {}) {
       if (sessions.length !== 1) return null;
       const sessionName = sessions[0];
       const project = await projectManager.findProjectBySession(sessionName);
-      await switchActiveSession(sessionName, chatId, project?.path);
+      await switchActiveSession(tmuxTarget(sessionName, project?.path), chatId, project?.path);
       return sessionName;
     },
     getActiveState: () => ({
-      activeSessionName,
+      // Derived, not stored: the tmux session name the pre-target callers read.
+      activeSessionName: activeTarget?.kind === 'tmux' ? activeTarget.sessionName : null,
+      target: activeTarget,
       activeChatId,
       activeProjectPath,
       pendingArgsSkill,
