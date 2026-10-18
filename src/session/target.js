@@ -149,5 +149,20 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
     }
   }
 
-  return { sendText, sendKeys, interrupt, getBoundSessionId, isAlive, status, readScreen };
+  // Whether Orca itself thinks the agent is running (true/false), or null for a
+  // transport that cannot say (tmux, or an Orca tab whose probe failed). This
+  // is Orca's own authoritative signal, so it wins over any reading derived
+  // from the transcript.
+  async function agentRunning(target) {
+    if (target.kind === 'tmux') return null;
+    try {
+      const answer = await orca.agentStatus(target.handle);
+      if (typeof answer?.isRunningAgent === 'boolean') return answer.isRunningAgent;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  return { sendText, sendKeys, interrupt, getBoundSessionId, isAlive, status, agentRunning, readScreen };
 }

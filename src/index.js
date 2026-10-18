@@ -161,11 +161,17 @@ export function createBot(config, deps = {}) {
         } else if (status === 'idle') {
           if (++typingIdleTicks >= 2) {
             const sawWorking = typingSawWorking;
-            stopTyping();
-            // A transport that never left idle did not finish a turn: it may
-            // still be starting. Only a turn that ran gets a stop notice.
-            if (sawWorking) await reportTurnStop(chatId);
-            return;
+            // A background task resumes the turn by itself, so an idle reading
+            // is a pause. Keep the indicator on and wait for the real stop.
+            if (sawWorking && await sessionHasPendingWork()) {
+              typingIdleTicks = 0;
+            } else {
+              stopTyping();
+              // A transport that never left idle did not finish a turn: it may
+              // still be starting. Only a turn that ran gets a stop notice.
+              if (sawWorking) await reportTurnStop(chatId);
+              return;
+            }
           }
         } else {
           typingIdleTicks = 0;
@@ -197,14 +203,40 @@ export function createBot(config, deps = {}) {
     refusal: '⚠️ *Claude Code stopped* (refusal).'
   };
 
+  async function transportIsRunning() {
+    try {
+      if (!activeTarget) return null;
+      const status = await io.status(activeTarget);
+      if (status === null) return null;
+      return status !== 'idle';
+    } catch {
+      return null;
+    }
+  }
+
+  // True when the turn pauses for work that resumes it by itself: a background
+  // agent, a background command, or a running sub-agent. Claude Code then
+  // continues with no user input, so the turn is not stopped.
+  async function sessionHasPendingWork() {
+    try {
+      if (await transportIsRunning() === true) return true;
+      return Boolean(await activeSessionReader?.hasPendingWork?.());
+    } catch {
+      return false; // an unknown state must not hide a real stop
+    }
+  }
+
   async function reportTurnStop(chatId, subtype = null) {
-    if (!chatId || turnStopReported) return;
+    if (!chatId || turnStopReported) return false;
+    // An interrupt is a real stop. A pending background task is a pause.
+    if (subtype !== 'interrupted' && (await sessionHasPendingWork() || await transportIsRunning() === true)) return false;
     turnStopReported = true;
     const note = STOP_NOTES[subtype]
       || (typeof subtype === 'string' && subtype.startsWith('error')
         ? '⚠️ *Claude Code stopped* (error).'
         : null);
     await sendWithFallback(bot, chatId, note || '✅ *Claude Code stopped.*');
+    return true;
   }
 
   // A new user turn re-arms the stop notice.
@@ -394,9 +426,15 @@ export function createBot(config, deps = {}) {
             }
             startTyping(activeChatId);
           } else if (event.type === 'turn_end') {
-            // The assistant ended the turn and now waits for the user.
-            stopTyping();
-            await reportTurnStop(activeChatId, event.subtype);
+            // A turn that pauses for background work is not a stop: keep the
+            // indicator on and send no notice. Claude resumes by itself.
+            if (event.subtype !== 'interrupted' && (await sessionHasPendingWork() || await transportIsRunning() === true)) {
+              startTyping(activeChatId);
+            } else {
+              // The assistant ended the turn and now waits for the user.
+              stopTyping();
+              await reportTurnStop(activeChatId, event.subtype);
+            }
           } else if (event.type === 'question' && event.content) {
             stopTyping();
             // The card carries the question. Text above it is not the answer,
