@@ -190,6 +190,56 @@ test('multi-question card shows one question at a time, then submits at the end'
   botInstance.stop();
 });
 
+test('a card that fails Markdown parsing still advances with a plain-text edit', async () => {
+  const mockBot = makeBotMock();
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig(), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+  mockBot.telegram.sendMessage = async () => {};
+
+  readerOnEvent({
+    type: 'question',
+    content: {
+      questions: [
+        { question: 'Color?', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false },
+        { question: 'Size?', options: [{ label: 'Big' }, { label: 'Small' }], multiSelect: false }
+      ]
+    }
+  });
+
+  const qaHandler = actionHandler(mockBot, 'qa:');
+  const edits = [];
+  let edited = null;
+  await qaHandler({
+    match: ['qa:0:1', '0', '1'],
+    chat: { id: 12345 },
+    answerCbQuery: async () => {},
+    editMessageText: async (text, extra) => {
+      edits.push(extra);
+      if (extra && extra.parse_mode === 'Markdown') {
+        throw new Error("400: Bad Request: can't parse entities: Can't find end of the entity");
+      }
+      edited = { text, extra };
+    }
+  });
+
+  assert.equal(edits.length, 2, 'the Markdown edit is retried as plain text');
+  assert.ok(edited, 'the card still advanced');
+  assert.equal(edited.extra.parse_mode, undefined);
+  assert.match(edited.text, /Question 2 of 2/);
+
+  botInstance.stop();
+});
+
 test('qn action moves a multi-select card to the next question', async () => {
   const mockBot = makeBotMock();
 

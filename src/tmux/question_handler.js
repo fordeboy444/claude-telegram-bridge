@@ -1,5 +1,17 @@
 const EMOJI_NUMBERS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
+// Question text, labels and descriptions come from the model, so they can hold
+// Markdown characters. Telegram's legacy Markdown parser rejects the WHOLE
+// message when an entity is left open: a single underscore inside a word
+// (`okf_version`) inside an italic description gives three `_` and an unclosed
+// entity, which answers 400 "can't parse entities" and the card stops moving.
+// Escape the four characters the legacy parser treats as syntax.
+const MARKDOWN_V1_SPECIAL = /[_*`[]/g;
+
+export function escapeMarkdownV1(text) {
+  return String(text ?? '').replace(MARKDOWN_V1_SPECIAL, ch => `\\${ch}`);
+}
+
 // Normalize any question payload (AskUserQuestion tool input, legacy Question
 // tool input) into a flat list:
 //   [{ question, options: [{label, description}], multiSelect }]
@@ -82,7 +94,7 @@ export function formatQuestionCard(questions, answers = new Map(), activeIndex =
       ? (q.multiSelect ? '❓ *Question (Multiple Choice)*' : '❓ *Question*')
       : `❓ *Question ${index + 1} of ${total}*${q.multiSelect ? ' _(select several)_' : ''}`,
     '',
-    isSingleQuestion ? q.question : `*${q.question}*`,
+    isSingleQuestion ? escapeMarkdownV1(q.question) : `*${escapeMarkdownV1(q.question)}*`,
     ''
   ];
 
@@ -91,8 +103,10 @@ export function formatQuestionCard(questions, answers = new Map(), activeIndex =
 
   q.options.forEach((opt, oi) => {
     const emoji = EMOJI_NUMBERS[oi] || `${oi + 1}️⃣`;
-    const label = typeof opt === 'string' ? opt : (opt.label || `Option ${oi + 1}`);
-    const description = typeof opt === 'object' && opt !== null ? opt.description : null;
+    const rawLabel = typeof opt === 'string' ? opt : (opt.label || `Option ${oi + 1}`);
+    const rawDescription = typeof opt === 'object' && opt !== null ? opt.description : null;
+    const label = escapeMarkdownV1(rawLabel); // message body only
+    const description = rawDescription ? escapeMarkdownV1(rawDescription) : null;
 
     if (q.multiSelect) {
       const checkMark = sel.has(oi) ? '☑️' : '◻️';
@@ -102,7 +116,7 @@ export function formatQuestionCard(questions, answers = new Map(), activeIndex =
       }
       inline_keyboard.push([
         {
-          text: `${checkMark} ${emoji} ${label}`,
+          text: `${checkMark} ${emoji} ${rawLabel}`, // button text is not parsed
           callback_data: `qa:${index}:${oi}`
         }
       ]);
@@ -114,7 +128,7 @@ export function formatQuestionCard(questions, answers = new Map(), activeIndex =
       }
       inline_keyboard.push([
         {
-          text: `${selected ? '✅ ' : ''}${emoji} ${label}`,
+          text: `${selected ? '✅ ' : ''}${emoji} ${rawLabel}`, // button text is not parsed
           callback_data: `qa:${index}:${oi}`
         }
       ]);

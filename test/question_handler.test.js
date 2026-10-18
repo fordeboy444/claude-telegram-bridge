@@ -229,6 +229,46 @@ test('formatQuestionCard adds Next on a multi-select page that is not last', () 
   ]);
 });
 
+test('formatQuestionCard escapes Markdown text so Telegram can parse the card', () => {
+  // The real Phase 2 card 4 description: three raw underscores (the italic
+  // wrapper plus okf_version) make Telegram reject the whole message with
+  // "can't parse entities", and the card never advances.
+  const payload = {
+    questions: [
+      {
+        question: 'Accept the recommended answers for Root index?',
+        multiSelect: false,
+        options: [
+          {
+            label: 'Accept all (Recommended)',
+            description: 'Reference markers, recomputed counts, idempotency test, okf_version in frontmatter.'
+          },
+          { label: 'I want changes', description: 'Tell me which answer to change.' }
+        ]
+      }
+    ]
+  };
+
+  const card = formatQuestionCard(payload);
+  assert.ok(card.text.includes('okf\\_version'), 'the underscore inside a word is escaped');
+  assert.ok(card.text.includes('_Reference markers, recomputed counts, idempotency test, okf\\_version in frontmatter._'));
+});
+
+test('formatQuestionCard escapes Markdown in labels but keeps button text raw', () => {
+  const card = formatQuestionCard({
+    question: 'Pick a name_style',
+    options: [{ label: 'use_this *now*' }]
+  });
+
+  assert.ok(card.text.includes('*use\\_this \\*now\\**'), 'body text is escaped');
+  assert.ok(card.text.includes('Pick a name\\_style'), 'question text is escaped');
+  assert.equal(
+    card.reply_markup.inline_keyboard[0][0].text,
+    '1️⃣ use_this *now*',
+    'button text is not Markdown and stays raw'
+  );
+});
+
 test('formatQuestionCard adds Submit on a last page after a multi-select page', () => {
   const payload = {
     questions: [

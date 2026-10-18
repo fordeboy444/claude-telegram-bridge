@@ -797,13 +797,25 @@ export function createBot(config, deps = {}) {
     }
     activeQuestion.index = index;
     const card = formatQuestionCard(activeQuestion.questions, activeQuestion.answers, index);
+    // A Markdown parse error must never stop the card. The first edit is
+    // formatted; if Telegram rejects it, retry as plain text so the user still
+    // advances. "message is not modified" means nothing changed - not a fault.
     try {
       await ctx.editMessageText(card.text, {
         parse_mode: 'Markdown',
         reply_markup: card.reply_markup
       });
-    } catch {
-      // Ignore Telegram message not modified error
+    } catch (err) {
+      if (/message is not modified/i.test(err.message)) {
+        return ctx.answerCbQuery();
+      }
+      try {
+        await ctx.editMessageText(card.text, { reply_markup: card.reply_markup });
+      } catch (retryErr) {
+        if (!/message is not modified/i.test(retryErr.message)) {
+          console.warn('⚠️ Question card update failed:', retryErr.message);
+        }
+      }
     }
     return ctx.answerCbQuery();
   }
