@@ -17,6 +17,9 @@ export const MAX_LISTED_AGENTS = 10;
 export const TAIL_BYTES = 262_144;
 // Valid /effort levels, mirroring the builtin choices in src/skills/scanner.js.
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Terminal stop reasons: the assistant ended the turn and waits for the user.
+const TURN_END_REASONS = new Set(['end_turn', 'max_tokens', 'stop_sequence', 'refusal']);
+const INTERRUPT_MARKER = /^\s*\[Request interrupted by user/;
 export const DESC_MAX = 48;
 // Character budget before the agent list gets shortened (Telegram cap 4096).
 const MAX_MESSAGE_CHARS = 3800;
@@ -146,8 +149,65 @@ async function readTailEffort(filePath) {
   }
 }
 
+// Text of one user record, for the interrupt marker only.
+function readUserText(record) {
+  if (!record || !record.message || !record.message.content) return '';
+  const content = record.message.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  }
+  return '';
+}
+
+// The newest turn-bearing record decides the card state:
+// - a terminal stop_reason ends the turn -> stopped
+// - an interrupt record ends the turn -> stopped
+// - a real user prompt opens a turn -> running
+// - any other assistant record (tool_use, null) keeps the turn open -> running
+// Command, meta and caveat user records do not change the state: skip them
+// and keep the backwards scan. No turn-bearing record -> stopped.
+async function readTailState(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    const start = Math.max(0, stat.size - TAIL_BYTES);
+    const length = stat.size - start;
+    const handle = await fs.open(filePath, 'r');
+    try {
+      const { buffer } = await handle.read(Buffer.alloc(length), 0, length, start);
+      const lines = buffer.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].trim()) continue;
+        let record;
+        try {
+          record = JSON.parse(lines[i]);
+        } catch {
+          // A line cut at the chunk start fails to parse; keep scanning
+          continue;
+        }
+        if (record.type === 'assistant' && record.message) {
+          return TURN_END_REASONS.has(record.message.stop_reason) ? 'stopped' : 'running';
+        }
+        if (record.type === 'user') {
+          const text = readUserText(record);
+          if (INTERRUPT_MARKER.test(text)) return 'stopped';
+          if (record.isMeta || text.includes('<command-name>') || text.includes('<local-command-caveat>')) {
+            continue;
+          }
+          return 'running';
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+    return 'stopped';
+  } catch {
+    return 'stopped';
+  }
+}
+
 // Parse one side-chain transcript: start, last activity, input+output token
-// sums over assistant records, and the last assistant model.
+// sums over assistant records, the last assistant model, and its effort.
 async function parseAgentTranscript(filePath) {
   let content;
   try {
@@ -161,6 +221,7 @@ async function parseAgentTranscript(filePath) {
   let inputTokens = 0;
   let outputTokens = 0;
   let model = null;
+  let effort = null;
 
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
@@ -186,10 +247,12 @@ async function parseAgentTranscript(filePath) {
       if (record.message.model) {
         model = record.message.model;
       }
+      const level = readRecordEffort(record);
+      if (level) effort = level;
     }
   }
 
-  return { startMs, lastMs, inputTokens, outputTokens, model };
+  return { startMs, lastMs, inputTokens, outputTokens, model, effort };
 }
 
 function agentIdFromFileName(fileName) {
@@ -263,6 +326,7 @@ async function gatherSubAgents(projectDir, effectiveId, now) {
 export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, now = Date.now() }) {
   const empty = {
     transcriptFound: false,
+    state: 'stopped', // no transcript means Claude waits at the prompt
     sessionStart: null,
     model: null,
     effort: null,
@@ -303,10 +367,11 @@ export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, 
     return { ...empty, running: sub.running, finishedCount: sub.finishedCount, totalCount: sub.totalCount };
   }
 
-  const [sessionStart, model, effort, sub] = await Promise.all([
+  const [sessionStart, model, effort, state, sub] = await Promise.all([
     readFirstLineTimestamp(transcriptPath),
     readTailModel(transcriptPath),
     readTailEffort(transcriptPath),
+    readTailState(transcriptPath),
     gatherSubAgents(projectDir, effectiveId, now).catch(
       () => ({ running: [], finishedCount: 0, totalCount: 0 })
     )
@@ -314,6 +379,7 @@ export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, 
 
   return {
     transcriptFound: true,
+    state,
     sessionStart,
     model,
     effort,
@@ -361,12 +427,12 @@ function formatAgentLine(agent, index, now) {
     ? `[${sanitizeLabel(agent.agentType, 24)}] `
     : '';
   const label = sanitizeLabel(agent.label);
-  const model = agent.model ? sanitizeLabel(agent.model, 24) : 'unknown';
+  const model = agent.model ? sanitizeLabel(agent.model, 40) : 'unknown';
+  const effortPart = agent.effort ? `effort ${sanitizeLabel(agent.effort, 24)}` : 'no effort';
   const parts = [
     `⏳ ${formatDuration(now - agent.startMs)}`,
-    `in ${formatCompactNumber(agent.inputTokens)}`,
-    `out ${formatCompactNumber(agent.outputTokens)}`,
     model,
+    effortPart,
     `active ${formatAge(agent.lastMs, now)}`
   ];
   return `${index}. ${typePart}${label}\n   ${parts.join(' · ')}`;
@@ -408,7 +474,12 @@ function fitMessage({ sessionName, alive, status, now }) {
 function renderStatusLines({ sessionName, alive, status, now, labelMax, maxListed }) {
   const lines = ['📊 *Session Status*'];
 
-  const stateMark = alive ? '🟢 Online' : '🔴 Terminated';
+  // A dead session is terminated. A live one is running during a turn and
+  // stopped while Claude waits for the user.
+  let stateMark = '🔴 Terminated';
+  if (alive) {
+    stateMark = status && status.state === 'running' ? '🟢 Running' : '🟡 Stopped';
+  }
   // Display name only: sessions are named claude-<folder>; show the folder part.
   const displayName = sessionName ? sessionName.replace(/^claude-/, '') : '';
   const name = sanitizeLabel(displayName || 'unknown');

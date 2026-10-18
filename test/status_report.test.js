@@ -187,7 +187,7 @@ test('gatherSessionStatus tolerates a missing transcript and the formatter still
   assert.match(message, /Session Status/);
   assert.match(message, /`x`/);
   assert.doesNotMatch(message, /claude-x/);
-  assert.match(message, /Online/);
+  assert.match(message, /🟡 Stopped/, 'a live session with no transcript waits at the prompt');
 });
 
 test('gatherSessionStatus falls back to the newest transcript when no session id is bound', async () => {
@@ -206,16 +206,17 @@ test('gatherSessionStatus falls back to the newest transcript when no session id
   assert.equal(status.sessionStart, Date.parse('2026-10-05T10:00:00Z'));
 });
 
-test('formatStatusMessage lists running agents with uptime, model, and tokens', async () => {
+test('formatStatusMessage lists running agents with uptime, model, and effort', async () => {
   const now = 1_700_000_000_000;
   const status = {
     transcriptFound: true,
+    state: 'running',
     sessionStart: now - 2 * 3600_000 - 14 * 60_000,
     model: 'glm-5.3:cloud',
     lastActivityMs: now - 3 * 60_000,
     running: [
-      { agentId: 'a', label: 'Fix failing tests', agentType: 'general-purpose', startMs: now - 12 * 60_000, lastMs: now - 20_000, inputTokens: 45200, outputTokens: 3100, model: 'haiku' },
-      { agentId: 'b', label: 'Search docs', agentType: 'fork', startMs: now - 2 * 60_000, lastMs: now - 5000, inputTokens: 8000, outputTokens: 1200, model: 'gemma4:31b' }
+      { agentId: 'a', label: 'Fix failing tests', agentType: 'general-purpose', startMs: now - 12 * 60_000, lastMs: now - 20_000, inputTokens: 45200, outputTokens: 3100, model: 'haiku', effort: 'high' },
+      { agentId: 'b', label: 'Search docs', agentType: 'fork', startMs: now - 2 * 60_000, lastMs: now - 5000, inputTokens: 8000, outputTokens: 1200, model: 'gemma4:31b', effort: null }
     ],
     finishedCount: 5,
     totalCount: 7
@@ -225,11 +226,14 @@ test('formatStatusMessage lists running agents with uptime, model, and tokens', 
 
   assert.match(message, /`myproject`/);
   assert.doesNotMatch(message, /claude-myproject/);
-  assert.match(message, /Online/);
+  assert.match(message, /🟢 Running/);
   assert.match(message, /2h 14m/);
   assert.match(message, /glm-5\.3:cloud/);
   assert.match(message, /2 running · 5 finished/);
-  assert.match(message, /12m.*in 45\.2k.*out 3\.1k.*haiku.*active 20s ago/s);
+  assert.match(message, /12m.*haiku.*effort high.*active 20s ago/s);
+  assert.match(message, /2m.*gemma4:31b.*no effort.*active 5s ago/s);
+  assert.doesNotMatch(message, /in 45\.2k/, 'token counts leave the agent line');
+  assert.doesNotMatch(message, /out 3\.1k/, 'token counts leave the agent line');
   assert.doesNotMatch(message, /…and/);
 });
 
@@ -284,7 +288,7 @@ test('formatStatusMessage shows a no-transcript-yet hint for a live session with
     alive: true,
     status: { transcriptFound: false, sessionStart: null, model: null, effort: null, lastActivityMs: null, running: [], finishedCount: 0, totalCount: 0 }
   });
-  assert.match(message, /🟢 Online/);
+  assert.match(message, /🟡 Stopped/);
   assert.match(message, /ℹ️ No transcript yet — send the session a message to start it/);
   assert.match(message, /Sub-agents:\* none/);
   // The hint explains the absence; the data lines must stay absent, not faked.
@@ -524,4 +528,110 @@ test('formatStatusMessage renders the Effort line directly under the Model line 
     now
   });
   assert.doesNotMatch(withoutEffort, /Effort:/);
+});
+
+test('gatherSessionStatus sets the state from the newest turn-bearing record', async () => {
+  const stateOf = async (sessionId, records) => {
+    const fx = await makeFixture({ sessionId });
+    await fx.writeTranscript(records);
+    const status = await gatherSessionStatus({
+      claudeHome: path.join(fx.tmpDir, '.claude'),
+      projectPath: fx.projectPath,
+      sessionId: fx.sessionId,
+      now: 1_700_000_000_000
+    });
+    return status.state;
+  };
+
+  // An open tool call keeps the turn running.
+  assert.equal(await stateOf('s-run', [
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z', message: { role: 'user', content: 'go' } },
+    { type: 'assistant', timestamp: '2026-10-05T10:01:00Z', message: { model: 'm', stop_reason: 'tool_use', usage: {} } }
+  ]), 'running', 'tool_use keeps the turn open');
+
+  // A terminal stop reason ends the turn.
+  assert.equal(await stateOf('s-stop', [
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z', message: { role: 'user', content: 'go' } },
+    { type: 'assistant', timestamp: '2026-10-05T10:01:00Z', message: { model: 'm', stop_reason: 'end_turn', usage: {} } }
+  ]), 'stopped', 'end_turn ends the turn');
+
+  // An interrupt ends the turn.
+  assert.equal(await stateOf('s-int', [
+    { type: 'assistant', timestamp: '2026-10-05T10:01:00Z', message: { model: 'm', stop_reason: 'tool_use', usage: {} } },
+    { type: 'user', timestamp: '2026-10-05T10:02:00Z', message: { role: 'user', content: '[Request interrupted by user for tool use]' } }
+  ]), 'stopped', 'the interrupt marker ends the turn');
+
+  // A command record after the turn end must not open a new turn.
+  assert.equal(await stateOf('s-cmd', [
+    { type: 'assistant', timestamp: '2026-10-05T10:01:00Z', message: { model: 'm', stop_reason: 'end_turn', usage: {} } },
+    { type: 'user', isMeta: true, timestamp: '2026-10-05T10:02:00Z', message: { role: 'user', content: '<command-name>/effort</command-name>\n<command-args>high</command-args>' } }
+  ]), 'stopped', 'a meta command record is not a new turn');
+
+  // A fresh user prompt opens a turn.
+  assert.equal(await stateOf('s-user', [
+    { type: 'assistant', timestamp: '2026-10-05T10:01:00Z', message: { model: 'm', stop_reason: 'end_turn', usage: {} } },
+    { type: 'user', timestamp: '2026-10-05T10:02:00Z', message: { role: 'user', content: 'next task' } }
+  ]), 'running', 'a user prompt opens a new turn');
+
+  // An empty transcript has no turn in progress.
+  assert.equal(await stateOf('s-empty', []), 'stopped');
+});
+
+test('formatStatusMessage shows Running only during a turn and Stopped otherwise', () => {
+  const base = {
+    transcriptFound: true,
+    sessionStart: 1_700_000_000_000,
+    model: 'm',
+    lastActivityMs: 1_700_000_000_000,
+    running: [],
+    finishedCount: 0,
+    totalCount: 0
+  };
+  const now = 1_700_000_000_000;
+  assert.match(
+    formatStatusMessage({ sessionName: 'claude-x', alive: true, status: { ...base, state: 'running' }, now }),
+    /🟢 Running/
+  );
+  assert.match(
+    formatStatusMessage({ sessionName: 'claude-x', alive: true, status: { ...base, state: 'stopped' }, now }),
+    /🟡 Stopped/
+  );
+  assert.match(
+    formatStatusMessage({ sessionName: 'claude-x', alive: false, status: { ...base, state: 'running' }, now }),
+    /🔴 Terminated/,
+    'a dead session is terminated, not running'
+  );
+});
+
+test('gatherSessionStatus reads each sub-agent effort from its own transcript', async () => {
+  const fx = await makeFixture({ sessionId: 'sess-eff-agent' });
+  await fx.writeTranscript([{ type: 'user', timestamp: '2026-10-05T10:00:00Z' }]);
+  await fx.writeAgent('with-effort', [
+    { type: 'assistant', timestamp: '2026-10-05T11:00:00Z', isSidechain: true, effort: 'medium', message: { model: 'haiku', usage: { input_tokens: 1, output_tokens: 1 } } }
+  ]);
+  await fx.writeAgent('no-effort', [
+    { type: 'assistant', timestamp: '2026-10-05T11:01:00Z', isSidechain: true, message: { model: 'haiku', usage: { input_tokens: 1, output_tokens: 1 } } }
+  ]);
+
+  const now = 1_700_000_000_000;
+  await fx.setMtimes([
+    [fx.transcriptPath, 0],
+    [path.join(fx.subagentsDir, 'agent-with-effort.jsonl'), 1000],
+    [path.join(fx.subagentsDir, 'agent-no-effort.jsonl'), 2000]
+  ]);
+
+  const status = await gatherSessionStatus({
+    claudeHome: path.join(fx.tmpDir, '.claude'),
+    projectPath: fx.projectPath,
+    sessionId: fx.sessionId,
+    now
+  });
+
+  const byId = Object.fromEntries(status.running.map(a => [a.agentId, a]));
+  assert.equal(byId['with-effort'].effort, 'medium');
+  assert.equal(byId['no-effort'].effort, null);
+
+  const message = formatStatusMessage({ sessionName: 'claude-x', alive: true, status, now });
+  assert.match(message, /effort medium/);
+  assert.match(message, /no effort/);
 });
