@@ -571,12 +571,14 @@ test('result events from the reader stop the typing indicator', async () => {
   botInstance.stop();
 });
 
-test('text events keep the typing indicator on; turn_end sends one stop notice', async () => {
+test('text events stream silently; turn_end sends one notifying stop notice', async () => {
   const mockBot = makeBotMock();
   const mockTmux = makeTmuxMock();
 
   const sentMessages = [];
-  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
+  mockBot.telegram.sendMessage = async (chatId, text, extra) => {
+    sentMessages.push({ chatId, text, extra });
+  };
 
   let readerOnEvent = null;
   class MockReader {
@@ -598,19 +600,19 @@ test('text events keep the typing indicator on; turn_end sends one stop notice',
   await readerOnEvent({ type: 'user', content: 'do it' });
   assert.equal(botInstance.getActiveState().typingActive, true);
 
-  // Mid-turn narration: Claude is still working, so nothing is sent.
+  // Mid-turn narration is sent at once, but with no notification.
   await readerOnEvent({ type: 'text', content: 'Let me read the file.' });
   assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays on through mid-turn text');
-  assert.equal(sentMessages.length, 0, 'narration is held, not sent');
+  assert.equal(sentMessages.length, 1, 'narration is sent');
+  assert.equal(sentMessages[0].text, 'Let me read the file.');
+  assert.equal(sentMessages[0].extra.disable_notification, true, 'narration is silent');
 
   // The assistant ends the turn and waits for the user.
   await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
   assert.equal(botInstance.getActiveState().typingActive, false, 'turn_end stops typing');
-  assert.equal(sentMessages.length, 1, 'one stop notice');
-  assert.equal(
-    sentMessages[0].text,
-    '✅ *Claude Code stopped.*\n\nLet me read the file.'
-  );
+  assert.equal(sentMessages.length, 2, 'one stop notice, no repeated answer');
+  assert.equal(sentMessages[1].text, '✅ *Claude Code stopped.*');
+  assert.notEqual(sentMessages[1].extra?.disable_notification, true, 'stop notice notifies');
 
   botInstance.stop();
 });
@@ -693,7 +695,9 @@ test('an interrupted turn sends one interrupted stop notice', async () => {
 test('turn_end and result produce one stop notice per turn', async () => {
   const mockBot = makeBotMock();
   const sentMessages = [];
-  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
+  mockBot.telegram.sendMessage = async (chatId, text, extra) => {
+    sentMessages.push({ chatId, text, extra });
+  };
 
   let readerOnEvent = null;
   class MockReader {
@@ -713,8 +717,10 @@ test('turn_end and result produce one stop notice per turn', async () => {
   await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
   await readerOnEvent({ type: 'result', subtype: 'success' });
 
-  assert.equal(sentMessages.length, 1);
-  assert.equal(sentMessages[0].text, '✅ *Claude Code stopped.*\n\nDone.');
+  assert.equal(sentMessages.length, 2, 'the output, then one stop notice');
+  assert.equal(sentMessages[0].text, 'Done.');
+  assert.equal(sentMessages[0].extra.disable_notification, true);
+  assert.equal(sentMessages[1].text, '✅ *Claude Code stopped.*');
 
   botInstance.stop();
 });
@@ -771,9 +777,10 @@ test('a question card is the only message while Claude waits for an answer', asy
     content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
   });
 
-  assert.equal(sentMessages.length, 1, 'only the question card is sent');
-  assert.ok(sentMessages[0].text.includes('Pick one:'));
-  assert.ok(!sentMessages[0].text.includes('I need one detail.'));
+  assert.equal(sentMessages.length, 2, 'the output, then the question card');
+  assert.equal(sentMessages[0].text, 'I need one detail.');
+  assert.ok(sentMessages[1].text.includes('Pick one:'), 'the card carries the question');
+  assert.ok(!sentMessages[1].text.includes('I need one detail.'), 'no repeated output');
 
   botInstance.stop();
 });

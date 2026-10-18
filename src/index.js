@@ -60,9 +60,8 @@ export function createBot(config, deps = {}) {
   let typingChatId = null;
   let typingIdleTicks = 0; // consecutive transport-idle readings while typing
   let typingSawWorking = false; // the turn reached 'working' before it went idle
-  // Quiet mode: Claude's text is held for the whole turn and sent once when
-  // Claude stops and waits for the user. Nothing streams during the turn.
-  let pendingTurnText = [];
+  // Claude's output streams through at once, but silently. Only the stop
+  // notice and a question card raise a Telegram notification.
   let turnStopReported = false; // one stop notice per turn
   let activeQuestion = null;
   let questionEventCounter = 0;
@@ -189,8 +188,9 @@ export function createBot(config, deps = {}) {
     typingSawWorking = false;
   }
 
-  // The one message a turn produces. The header names the event, the body is
-  // the final answer text. A reason that is not a normal stop is named too.
+  // The stop notice. Its text already reached the chat, silently, so this
+  // message is the notification alone: the header, no repeated answer. A
+  // reason that is not a normal stop is named too.
   const STOP_NOTES = {
     interrupted: '⏹️ *Claude Code stopped* (interrupted).',
     max_tokens: '⚠️ *Claude Code stopped* (max tokens).',
@@ -200,23 +200,15 @@ export function createBot(config, deps = {}) {
   async function reportTurnStop(chatId, subtype = null) {
     if (!chatId || turnStopReported) return;
     turnStopReported = true;
-    const text = pendingTurnText.join('\n\n').trim();
-    pendingTurnText = [];
     const note = STOP_NOTES[subtype]
       || (typeof subtype === 'string' && subtype.startsWith('error')
         ? '⚠️ *Claude Code stopped* (error).'
         : null);
-    const head = note || '✅ *Claude Code stopped.*';
-    const full = text ? `${head}\n\n${text}` : head;
-    // A long answer still obeys Telegram's 4096-character message limit.
-    for (const chunk of splitTelegramMessage(full, 4000)) {
-      await sendWithFallback(bot, chatId, chunk);
-    }
+    await sendWithFallback(bot, chatId, note || '✅ *Claude Code stopped.*');
   }
 
-  // A new user turn replaces the held text and re-arms the stop notice.
+  // A new user turn re-arms the stop notice.
   function resetTurn() {
-    pendingTurnText = [];
     turnStopReported = false;
   }
 
@@ -395,9 +387,11 @@ export function createBot(config, deps = {}) {
             resetTurn();
             startTyping(activeChatId);
           } else if (event.type === 'text' && event.content) {
-            // Narration is held, not sent: Claude is still working. The turn's
-            // final answer leaves with the stop notice below.
-            pendingTurnText.push(event.content);
+            // Send the output at once, silently. Only the stop notice and a
+            // question card notify the user.
+            for (const chunk of splitTelegramMessage(event.content, 4000)) {
+              await sendWithFallback(bot, activeChatId, chunk, { disable_notification: true });
+            }
             startTyping(activeChatId);
           } else if (event.type === 'turn_end') {
             // The assistant ended the turn and now waits for the user.
