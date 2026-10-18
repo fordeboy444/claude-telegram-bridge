@@ -155,7 +155,8 @@ test('multi-question card shows one question at a time, then submits at the end'
     }
   });
 
-  const first = sentMessages.at(-1);
+  // The card is followed by the bottom keyboard message, so pick the card.
+  const first = sentMessages.filter(m => m.extra?.reply_markup?.inline_keyboard).at(-1);
   assert.match(first.text, /Question 1 of 2/);
   assert.ok(!first.text.includes('Size?'), 'second question is not shown yet');
   assert.equal(first.extra.reply_markup.inline_keyboard.length, 2);

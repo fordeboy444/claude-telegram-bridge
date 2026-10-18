@@ -4,12 +4,13 @@
 // breakage is visible in the daemon output.
 export async function sendWithFallback(bot, chatId, text, extra = undefined) {
   try {
-    await bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown', ...extra });
+    return await bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown', ...extra });
   } catch {
     try {
-      await bot.telegram.sendMessage(chatId, text, extra ? { ...extra } : undefined);
+      return await bot.telegram.sendMessage(chatId, text, extra ? { ...extra } : undefined);
     } catch (err) {
       console.warn(`⚠️ Telegram send failed to chat ${chatId}:`, err.message);
+      return null;
     }
   }
 }

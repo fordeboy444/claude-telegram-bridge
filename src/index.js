@@ -7,6 +7,7 @@ import { createAuthMiddleware } from './auth.js';
 import { TmuxController } from './tmux/controller.js';
 import { ClaudeSessionReader } from './tmux/session_reader.js';
 import { formatQuestionCard, normalizeQuestions, buildAnswerKeys } from './tmux/question_handler.js';
+import { buildQuestionKeyboard, matchQuestionKeyboard } from './tmux/question_keyboard.js';
 import { splitTelegramMessage } from './utils/telegram_chunker.js';
 import { scanSkills, getBuiltInCommands, sanitizeTelegramCommand, resolveSkillsDirectories, scanPluginSkills } from './skills/scanner.js';
 import { buildSkillsKeyboard, buildSkillInspectView, assignSkillHashes } from './skills/menu.js';
@@ -31,6 +32,10 @@ delete process.env.CLAUDE_CODE_CHILD_SESSION;
 // from an Orca tab that refused the write. Never report a success that did
 // not happen.
 const NOT_ACCEPTED = '⚠️ The tab did not accept the input. Nothing was sent.';
+
+// Removes the bottom reply keyboard with the next bot message, so no separate
+// "keyboard closed" message is needed.
+const REMOVE_KEYBOARD = { remove_keyboard: true };
 
 export function createBot(config, deps = {}) {
   const bot = deps.bot || new Telegraf(config.botToken);
@@ -62,6 +67,9 @@ export function createBot(config, deps = {}) {
   let lastInjectedPrompt = null;
   let lastInjectedTime = 0;
   let activeQuestion = null;
+  // The bottom reply-keyboard message. It lives outside activeQuestion so the
+  // cleanup still finds it after the question state is dropped.
+  let questionControl = null;
   let questionEventCounter = 0;
   // Bumped on every switchActiveSession: reader callbacks capture their own
   // epoch and drop events when a newer switch has superseded them, so a
@@ -291,7 +299,11 @@ export function createBot(config, deps = {}) {
     lastInjectedPrompt = null; // stale prompts must not suppress echoes in the new session
     // Question cards and "run with arguments" prompts belong to the outgoing
     // session: keeping them across switches would inject the old session's
-    // keys/args into the new one.
+    // keys/args into the new one. The guard keeps a switch with no open
+    // question fully synchronous, so activeTarget is set in the same tick.
+    if (questionControl) {
+      await clearQuestionControls({ removeKeyboard: true });
+    }
     activeQuestion = null;
     pendingArgsSkill = null;
 
@@ -378,7 +390,12 @@ export function createBot(config, deps = {}) {
               index: 0
             };
             const card = formatQuestionCard(questions, activeQuestion.answers, activeQuestion.index);
-            await sendWithFallback(bot, activeChatId, card.text, { reply_markup: card.reply_markup });
+            const sent = await sendWithFallback(bot, activeChatId, card.text, { reply_markup: card.reply_markup });
+            // The card message id and chat are kept so an inline tap and a
+            // bottom-keyboard tap edit the same card from either context.
+            activeQuestion.chatId = activeChatId;
+            activeQuestion.cardMessageId = sent?.message_id ?? null;
+            await showQuestionControls(activeChatId);
           } else if (event.type === 'result') {
             // Turn ended (success or error), even with no final text block.
             stopTyping();
@@ -474,9 +491,13 @@ export function createBot(config, deps = {}) {
     }
     if (!(await ensureSessionAlive(ctx))) return;
     await io.interrupt(activeTarget);
+    await clearQuestionControls();
     activeQuestion = null;
     stopTyping();
-    return ctx.reply(`🛑 Interrupt sent to \`${targetLabel(activeTarget)}\``, { parse_mode: 'Markdown' });
+    return ctx.reply(`🛑 Interrupt sent to \`${targetLabel(activeTarget)}\``, {
+      parse_mode: 'Markdown',
+      reply_markup: REMOVE_KEYBOARD
+    });
   });
 
   bot.command('projects', async (ctx) => {
@@ -796,73 +817,109 @@ export function createBot(config, deps = {}) {
     return false;
   }
 
-  // Show one question page of a multi-question card and keep the state index.
-  async function renderActiveQuestion(ctx, index) {
-    if (!activeQuestion) {
-      return ctx.answerCbQuery('Question expired or not found');
+  // Edit the inline card by id. A callback tap and a reply-keyboard tap use
+  // different contexts, so neither can rely on ctx.editMessageText.
+  // A Markdown parse error must never stop the card: the first edit is
+  // formatted; if Telegram rejects it, retry as plain text so the user still
+  // advances. "message is not modified" means nothing changed - not a fault.
+  async function editQuestionCard(ctx = null) {
+    const q = activeQuestion;
+    if (!q) return;
+    if (!q.chatId || q.cardMessageId == null) {
+      // No remembered message (an old card or a mock transport): fall back to
+      // the callback's own edit so the card still advances.
+      if (!ctx?.editMessageText) return;
+      const card = formatQuestionCard(q.questions, q.answers, q.index);
+      try {
+        await ctx.editMessageText(card.text, { parse_mode: 'Markdown', reply_markup: card.reply_markup });
+      } catch (err) {
+        if (/message is not modified/i.test(err.message)) return;
+        await ctx.editMessageText(card.text, { reply_markup: card.reply_markup }).catch(() => {});
+      }
+      return;
     }
-    activeQuestion.index = index;
-    const card = formatQuestionCard(activeQuestion.questions, activeQuestion.answers, index);
-    // A Markdown parse error must never stop the card. The first edit is
-    // formatted; if Telegram rejects it, retry as plain text so the user still
-    // advances. "message is not modified" means nothing changed - not a fault.
+    const card = formatQuestionCard(q.questions, q.answers, q.index);
     try {
-      await ctx.editMessageText(card.text, {
+      await bot.telegram.editMessageText(q.chatId, q.cardMessageId, undefined, card.text, {
         parse_mode: 'Markdown',
         reply_markup: card.reply_markup
       });
     } catch (err) {
-      if (/message is not modified/i.test(err.message)) {
-        return ctx.answerCbQuery();
-      }
+      if (/message is not modified/i.test(err.message)) return;
       try {
-        await ctx.editMessageText(card.text, { reply_markup: card.reply_markup });
+        await bot.telegram.editMessageText(q.chatId, q.cardMessageId, undefined, card.text, {
+          reply_markup: card.reply_markup
+        });
       } catch (retryErr) {
         if (!/message is not modified/i.test(retryErr.message)) {
           console.warn('⚠️ Question card update failed:', retryErr.message);
         }
       }
     }
-    return ctx.answerCbQuery();
   }
 
-  async function submitAnswers(ctx) {
-    const question = activeQuestion;
-    activeQuestion = null;
-    const counterAtStart = questionEventCounter;
-    startTyping(ctx.chat?.id);
-
-    const keys = buildAnswerKeys(question.questions, question.answers);
-    const sent = await io.sendKeys(activeTarget, keys, 300);
-    if (sent.accepted === false) {
-      stopTyping();
-      await ctx.answerCbQuery('Send failed');
-      await ctx.reply('⚠️ The terminal did not accept the answer. Nothing was sent.');
-      return;
+  // Telegram has no sticky message, so the reply keyboard is the only control
+  // fixed above the input field. editMessageText accepts an inline keyboard
+  // only, so a new page needs a NEW message to install a new keyboard; the old
+  // control message is deleted first.
+  async function showQuestionControls(chatId) {
+    if (!activeQuestion || !chatId) return;
+    const view = buildQuestionKeyboard(
+      activeQuestion.questions,
+      activeQuestion.answers,
+      activeQuestion.index
+    );
+    if (questionControl?.messageId) {
+      const old = questionControl;
+      questionControl = null;
+      await bot.telegram.deleteMessage(old.chatId, old.messageId).catch(() => {});
     }
-
-    const ok = await ensureModalSubmitted(activeTarget, counterAtStart);
-    if (ok) {
-      await ctx.answerCbQuery('Submitted answers');
-      await ctx.reply('📨 Answers submitted to Claude.');
-    } else {
-      stopTyping();
-      await ctx.answerCbQuery('Submit failed');
-      await ctx.reply(
-        '⚠️ Could not confirm the answer in the terminal. The question may still be open there.'
-      );
+    if (view.reply_markup.keyboard.length === 0) return;
+    try {
+      const sent = await bot.telegram.sendMessage(chatId, view.text, {
+        reply_markup: view.reply_markup
+      });
+      // The page is remembered with the keyboard: a tap on a stale keyboard
+      // must not answer the current page with an option number it never meant.
+      questionControl = {
+        chatId,
+        messageId: sent?.message_id ?? null,
+        index: activeQuestion.index
+      };
+    } catch (err) {
+      // A reply keyboard works in private chats only. The inline card still
+      // answers, so a group chat only loses the fixed anchor.
+      console.warn('⚠️ Question keyboard send failed:', err.message);
     }
   }
 
-  bot.action(/qa:(\d+):(\d+)/, async (ctx) => {
-    const qi = parseInt(ctx.match[1], 10);
-    const oi = parseInt(ctx.match[2], 10);
-    if (!activeQuestion) {
-      return ctx.answerCbQuery('Question expired or not found');
+  async function clearQuestionControls({ removeKeyboard = false } = {}) {
+    const control = questionControl;
+    questionControl = null;
+    if (!control) return;
+    if (control.messageId != null) {
+      await bot.telegram.deleteMessage(control.chatId, control.messageId).catch(() => {});
     }
+    if (removeKeyboard) {
+      await bot.telegram
+        .sendMessage(control.chatId, '⌨️ Question closed.', { reply_markup: REMOVE_KEYBOARD })
+        .catch(() => {});
+    }
+  }
+
+  async function refreshQuestionCard(ctx = null) {
+    if (!activeQuestion) return;
+    await editQuestionCard(ctx);
+    await showQuestionControls(activeQuestion.chatId);
+  }
+
+  // One place for an option answer, used by inline buttons and keyboard taps.
+  // Returns { ok, submit }: submit asks the caller to send the key sequence.
+  async function applyOptionAnswer(qi, oi, ctx = null) {
+    if (!activeQuestion) return { ok: false, submit: false };
     const question = activeQuestion.questions[qi];
-    if (!question || !question.options[oi]) {
-      return ctx.answerCbQuery('Option not found');
+    if (!question || !Array.isArray(question.options) || !question.options[oi]) {
+      return { ok: false, submit: false };
     }
 
     if (question.multiSelect) {
@@ -873,8 +930,10 @@ export function createBot(config, deps = {}) {
         sel.add(oi);
       }
       activeQuestion.answers.set(qi, sel);
-      // Stay on this page; the card shows a Next or Submit button.
-      return renderActiveQuestion(ctx, qi);
+      // Stay on this page; the card shows a Next or Submit control.
+      activeQuestion.index = qi;
+      await refreshQuestionCard(ctx);
+      return { ok: true, submit: false };
     }
 
     activeQuestion.answers.set(qi, new Set([oi]));
@@ -882,14 +941,105 @@ export function createBot(config, deps = {}) {
 
     // Single-choice answers advance to the next question one page at a time.
     if (!isLast) {
-      return renderActiveQuestion(ctx, qi + 1);
+      activeQuestion.index = qi + 1;
+      await refreshQuestionCard(ctx);
+      return { ok: true, submit: false };
     }
 
     // Pure single-choice sets submit as soon as the last question is answered.
+    // An earlier multi-select page needs an explicit Submit tap.
+    activeQuestion.index = qi;
     const allSingleChoice = activeQuestion.questions.every(q => !q.multiSelect);
-    if (!allSingleChoice) {
-      // An earlier multi-select page needs an explicit Submit tap.
-      return renderActiveQuestion(ctx, qi);
+    await refreshQuestionCard(ctx);
+    return { ok: true, submit: allSingleChoice };
+  }
+
+  // Show one question page of a multi-question card and keep the state index.
+  async function renderActiveQuestion(ctx, index) {
+    if (!activeQuestion) {
+      return ctx.answerCbQuery('Question expired or not found');
+    }
+    activeQuestion.index = index;
+    await refreshQuestionCard(ctx);
+    return ctx.answerCbQuery();
+  }
+
+  // A reply-keyboard tap is a text update, so there is no callback query to
+  // answer. The transitions are the same as an inline button tap.
+  async function handleQuestionKeyboard(ctx, hit) {
+    if (!activeQuestion) return;
+
+    if (hit.kind === 'next') {
+      activeQuestion.index = Math.min(
+        activeQuestion.index + 1,
+        activeQuestion.questions.length - 1
+      );
+      await refreshQuestionCard();
+      return;
+    }
+
+    if (hit.kind === 'submit') {
+      const anyAnswered = [...activeQuestion.answers.values()].some(s => s.size > 0);
+      if (!anyAnswered) return ctx.reply('⚠️ Please select at least one option.');
+      if (!activeTarget) return ctx.reply('⚠️ No active Claude session.');
+      if (!(await ensureSessionAlive(ctx))) return;
+      return submitAnswers(ctx);
+    }
+
+    const result = await applyOptionAnswer(activeQuestion.index, hit.oi, ctx);
+    if (!result.ok || !result.submit) return;
+    if (!activeTarget) return ctx.reply('⚠️ No active Claude session.');
+    if (!(await ensureSessionAlive(ctx))) return;
+    return submitAnswers(ctx);
+  }
+
+  async function submitAnswers(ctx) {
+    const question = activeQuestion;
+    activeQuestion = null;
+    // Drop the bottom keyboard here; the reply below carries the removal.
+    await clearQuestionControls();
+    const counterAtStart = questionEventCounter;
+    startTyping(ctx.chat?.id);
+
+    const keys = buildAnswerKeys(question.questions, question.answers);
+    const sent = await io.sendKeys(activeTarget, keys, 300);
+    if (sent.accepted === false) {
+      stopTyping();
+      await ctx.answerCbQuery?.('Send failed');
+      await ctx.reply(
+        '⚠️ The terminal did not accept the answer. Nothing was sent.',
+        { reply_markup: REMOVE_KEYBOARD }
+      );
+      return;
+    }
+
+    const ok = await ensureModalSubmitted(activeTarget, counterAtStart);
+    if (ok) {
+      await ctx.answerCbQuery?.('Submitted answers');
+      await ctx.reply('📨 Answers submitted to Claude.', { reply_markup: REMOVE_KEYBOARD });
+    } else {
+      stopTyping();
+      await ctx.answerCbQuery?.('Submit failed');
+      await ctx.reply(
+        '⚠️ Could not confirm the answer in the terminal. The question may still be open there.',
+        { reply_markup: REMOVE_KEYBOARD }
+      );
+    }
+  }
+
+  bot.action(/qa:(\d+):(\d+)/, async (ctx) => {
+    const qi = parseInt(ctx.match[1], 10);
+    const oi = parseInt(ctx.match[2], 10);
+    if (!activeQuestion) {
+      return ctx.answerCbQuery('Question expired or not found');
+    }
+
+    const result = await applyOptionAnswer(qi, oi, ctx);
+    if (!result.ok) {
+      return ctx.answerCbQuery('Option not found');
+    }
+    if (!result.submit) {
+      return ctx.answerCbQuery();
     }
 
     if (!activeTarget) {
@@ -933,6 +1083,21 @@ export function createBot(config, deps = {}) {
   // Text Message Forwarding
   bot.on('text', async (ctx) => {
     const text = ctx.message.text;
+
+    // A tap on the bottom reply keyboard arrives as ordinary text. Handle it
+    // before every other path: an option label must never reach Claude as a
+    // prompt, and must not become skill arguments. A keyboard from an older
+    // page is ignored: the current page owns the taps.
+    if (activeQuestion && questionControl?.index === activeQuestion.index) {
+      const hit = matchQuestionKeyboard(text, activeQuestion.questions, activeQuestion.index);
+      if (hit) {
+        // The keyboard stays after the message is gone; drop the noise.
+        try {
+          await ctx.deleteMessage();
+        } catch {}
+        return handleQuestionKeyboard(ctx, hit);
+      }
+    }
 
     if (text === '/cancel') {
       pendingArgsSkill = null;
