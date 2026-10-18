@@ -810,3 +810,55 @@ test('ClaudeSessionReader emits an open question once, not on every tick', async
 
   assert.equal(events.filter((e) => e.type === 'question').length, 1);
 });
+
+test('ClaudeSessionReader emits turn_end only when the assistant turn ends', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-turn-end-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-turn.jsonl');
+
+  await fs.writeFile(sessionFile, [
+    // A mid-turn text block: stop_reason tool_use means Claude continues.
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'I will read the file.' }], stop_reason: 'tool_use' }
+    }),
+    // The last block of the turn: Claude now waits for the user.
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Done.' }], stop_reason: 'end_turn' }
+    })
+  ].join('\n') + '\n');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const events = await reader.readNewEvents(projectPath);
+
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ['text', 'text', 'turn_end'],
+    'only end_turn ends the typing indicator'
+  );
+});
+
+test('ClaudeSessionReader ends the turn on an interrupt marker', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-interrupt-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-interrupt.jsonl');
+
+  await fs.writeFile(sessionFile, [
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Starting the long task.' }], stop_reason: 'tool_use' }
+    }),
+    JSON.stringify({ type: 'user', message: { content: '[Request interrupted by user for tool use]' } })
+  ].join('\n') + '\n');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const events = await reader.readNewEvents(projectPath);
+
+  assert.deepEqual(events.map((e) => e.type), ['text', 'user', 'turn_end']);
+  assert.equal(events[2].subtype, 'interrupted');
+});

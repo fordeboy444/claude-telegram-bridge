@@ -355,12 +355,18 @@ export function createBot(config, deps = {}) {
             }
             startTyping(activeChatId);
           } else if (event.type === 'text' && event.content) {
-            stopTyping();
+            // Text is narration, not the end of the turn: Claude keeps working
+            // after it. Keep the indicator on and recover it if a status poll
+            // stopped it early.
+            startTyping(activeChatId);
             // Send assistant text from session_reader as clean markdown text rather than wrapping in code fences (```)
             const chunks = splitTelegramMessage(event.content, 4000);
             for (const c of chunks) {
               await sendWithFallback(bot, activeChatId, c);
             }
+          } else if (event.type === 'turn_end') {
+            // The assistant ended the turn and now waits for the user.
+            stopTyping();
           } else if (event.type === 'question' && event.content) {
             stopTyping();
             questionEventCounter++;

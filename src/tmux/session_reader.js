@@ -72,6 +72,16 @@ export async function findLatestJsonlFile(projectDir) {
 // The tools that end a turn with a question for the user.
 const ASK_TOOL_NAMES = new Set(['AskUserQuestion', 'Question']);
 
+// An assistant record's stop_reason says whether Claude continues or waits.
+// `tool_use` and `pause_turn` continue the turn; these reasons end it, so the
+// record is the honest "Claude is now waiting for the user" signal. An
+// interactive transcript writes no `result` record, so this is the only one.
+const TURN_END_REASONS = new Set(['end_turn', 'max_tokens', 'stop_sequence', 'refusal']);
+
+// An interrupted turn writes this user record and no assistant record, so the
+// record itself is the end-of-turn signal. Claude now waits for the user.
+const INTERRUPT_MARKER = /^\s*\[Request interrupted by user/;
+
 // How much of a transcript's tail is scanned for a question Claude is waiting
 // on. Nothing is written after such a question, so it sits at the very end of
 // the file. 1 MB is far more than one turn, and a transcript grows to many
@@ -229,6 +239,11 @@ export class ClaudeSessionReader {
             // Ignore system caveats, local commands, and empty content
             if (raw && !raw.includes('<local-command-caveat>') && !raw.includes('<command-name>')) {
               events.push({ type: 'user', content: raw.trim() });
+              // The echo above stays, but an interrupt also ends the turn: the
+              // user event starts typing again, so the end must come after it.
+              if (INTERRUPT_MARKER.test(raw)) {
+                events.push({ type: 'turn_end', subtype: 'interrupted' });
+              }
             }
           } else if (entry.type === 'assistant' && entry.message && entry.message.content) {
             const content = entry.message.content;
@@ -243,6 +258,12 @@ export class ClaudeSessionReader {
                   events.push({ type: 'question', content: block.input || block.arguments, id: block.id ?? null });
                 }
               }
+            }
+            // The record that ends a turn carries the terminal stop_reason, so
+            // the text above it and this event arrive in the right order.
+            const stopReason = entry.message.stop_reason;
+            if (TURN_END_REASONS.has(stopReason)) {
+              events.push({ type: 'turn_end', subtype: stopReason });
             }
           } else if (entry.type === 'tool_use' && ASK_TOOL_NAMES.has(entry.name)) {
             this._lastQuestionId = entry.id ?? this._lastQuestionId;

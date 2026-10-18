@@ -569,6 +569,41 @@ test('result events from the reader stop the typing indicator', async () => {
   botInstance.stop();
 });
 
+test('text events keep the typing indicator on; turn_end stops it', async () => {
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock();
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) {
+      readerOnEvent = onEvent;
+    }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  // A user turn starts the indicator.
+  await readerOnEvent({ type: 'user', content: 'do it' });
+  assert.equal(botInstance.getActiveState().typingActive, true);
+
+  // Mid-turn narration: Claude is still working, so the indicator stays on.
+  await readerOnEvent({ type: 'text', content: 'Let me read the file.' });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays on through mid-turn text');
+
+  // The assistant ends the turn and waits for the user.
+  await readerOnEvent({ type: 'turn_end' });
+  assert.equal(botInstance.getActiveState().typingActive, false, 'turn_end stops typing');
+
+  botInstance.stop();
+});
+
 test('plain text is injected with the Telegram user prefix and echo-suppressed', async () => {
   const mockBot = makeBotMock();
 
