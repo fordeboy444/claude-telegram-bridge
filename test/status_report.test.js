@@ -8,8 +8,7 @@ import {
   formatStatusMessage,
   formatCompactNumber,
   formatDuration,
-  sanitizeLabel,
-  RUNNING_WINDOW_MS
+  sanitizeLabel
 } from '../src/status_report.js';
 import { getProjectSlug } from '../src/tmux/session_reader.js';
 
@@ -48,25 +47,29 @@ async function makeFixture({ sessionId = 'sess-111' } = {}) {
   };
 }
 
-test('gatherSessionStatus separates fresh running agents from stale finished ones', async () => {
+test('gatherSessionStatus separates running agents from finished ones by transcript', async () => {
   const fx = await makeFixture();
   await fx.writeTranscript([
     { type: 'user', timestamp: '2026-10-05T10:00:00Z' },
     { type: 'assistant', timestamp: '2026-10-05T10:02:00Z', message: { model: 'glm-5.3:cloud', usage: { input_tokens: 10, output_tokens: 5 } } }
   ]);
 
-  // agent-a: fresh with usage; agent-b: fresh without meta; agent-stale: old mtime
+  // agent-a: open tool call; agent-b: open tool call without meta;
+  // agent-done: terminal stop_reason; agent-old: hours old but still working.
   await fx.writeAgent('a', [
     { type: 'user', timestamp: '2026-10-05T11:00:00Z', isSidechain: true },
-    { type: 'assistant', timestamp: '2026-10-05T11:02:00Z', isSidechain: true, message: { model: 'haiku', usage: { input_tokens: 45000, output_tokens: 3000, cache_read_input_tokens: 999999, cache_creation_input_tokens: 999999 } } },
-    { type: 'assistant', timestamp: '2026-10-05T11:03:00Z', isSidechain: true, message: { model: 'haiku', usage: { input_tokens: 200, output_tokens: 100 } } }
+    { type: 'assistant', timestamp: '2026-10-05T11:02:00Z', isSidechain: true, message: { model: 'haiku', stop_reason: 'tool_use', usage: { input_tokens: 45000, output_tokens: 3000, cache_read_input_tokens: 999999, cache_creation_input_tokens: 999999 } } },
+    { type: 'assistant', timestamp: '2026-10-05T11:03:00Z', isSidechain: true, message: { model: 'haiku', stop_reason: 'tool_use', usage: { input_tokens: 200, output_tokens: 100 } } }
   ]);
   await fx.writeMeta('a', { agentType: 'general-purpose', description: 'Fix failing tests' });
   await fx.writeAgent('b', [
-    { type: 'assistant', timestamp: '2026-10-05T11:10:00Z', isSidechain: true, message: { model: 'gemma4:31b', usage: { input_tokens: 8000, output_tokens: 1200 } } }
+    { type: 'assistant', timestamp: '2026-10-05T11:10:00Z', isSidechain: true, message: { model: 'gemma4:31b', stop_reason: 'tool_use', usage: { input_tokens: 8000, output_tokens: 1200 } } }
   ]);
-  await fx.writeAgent('stale', [
-    { type: 'assistant', timestamp: '2026-10-05T09:00:00Z', isSidechain: true, message: { model: 'haiku', usage: { input_tokens: 500, output_tokens: 500 } } }
+  await fx.writeAgent('done', [
+    { type: 'assistant', timestamp: '2026-10-05T11:20:00Z', isSidechain: true, message: { model: 'haiku', stop_reason: 'end_turn', usage: { input_tokens: 500, output_tokens: 500 } } }
+  ]);
+  await fx.writeAgent('old', [
+    { type: 'assistant', timestamp: '2026-10-05T09:00:00Z', isSidechain: true, message: { model: 'haiku', stop_reason: 'tool_use', usage: { input_tokens: 100, output_tokens: 100 } } }
   ]);
 
   const now = 1_700_000_000_000;
@@ -74,7 +77,8 @@ test('gatherSessionStatus separates fresh running agents from stale finished one
     [fx.transcriptPath, -3 * 60_000],
     [path.join(fx.subagentsDir, 'agent-a.jsonl'), 20_000],
     [path.join(fx.subagentsDir, 'agent-b.jsonl'), 30_000],
-    [path.join(fx.subagentsDir, 'agent-stale.jsonl'), -RUNNING_WINDOW_MS - 5000]
+    [path.join(fx.subagentsDir, 'agent-done.jsonl'), 40_000],
+    [path.join(fx.subagentsDir, 'agent-old.jsonl'), -12 * 3600_000]
   ]);
 
   const status = await gatherSessionStatus({
@@ -85,11 +89,15 @@ test('gatherSessionStatus separates fresh running agents from stale finished one
   });
 
   assert.equal(status.transcriptFound, true);
-  assert.deepEqual(status.running.map(a => a.agentId), ['a', 'b'], 'running sorted oldest start first, stale agent excluded');
+  assert.deepEqual(
+    status.running.map(a => a.agentId),
+    ['old', 'a', 'b'],
+    'running sorted oldest start first; a terminal stop_reason excludes the agent, an old mtime does not'
+  );
   assert.equal(status.finishedCount, 1);
-  assert.equal(status.totalCount, 3);
+  assert.equal(status.totalCount, 4);
 
-  const a = status.running[0];
+  const a = status.running.find(agent => agent.agentId === 'a');
   assert.equal(a.label, 'Fix failing tests');
   assert.equal(a.agentType, 'general-purpose');
   // Elapsed = now - first record timestamp (11:00 -> 10:00 is 3600s)
@@ -100,7 +108,7 @@ test('gatherSessionStatus separates fresh running agents from stale finished one
   assert.equal(a.outputTokens, 3100);
   assert.equal(a.model, 'haiku');
 
-  const b = status.running[1];
+  const b = status.running.find(agent => agent.agentId === 'b');
   assert.equal(b.label, 'b', 'missing meta falls back to the file-name id');
   assert.equal(b.inputTokens, 8000);
 
@@ -634,4 +642,70 @@ test('gatherSessionStatus reads each sub-agent effort from its own transcript', 
   const message = formatStatusMessage({ sessionName: 'claude-x', alive: true, status, now });
   assert.match(message, /effort medium/);
   assert.match(message, /no effort/);
+});
+
+test('a running sub-agent keeps the state running while the main turn waits', async () => {
+  const fx = await makeFixture({ sessionId: 'sess-sub-run' });
+  await fx.writeTranscript([
+    { type: 'user', timestamp: '2026-10-05T10:00:00Z', message: { role: 'user', content: 'go' } },
+    { type: 'assistant', timestamp: '2026-10-05T10:01:00Z', message: { model: 'm', stop_reason: 'end_turn', usage: {} } }
+  ]);
+  await fx.writeAgent('worker', [
+    { type: 'assistant', timestamp: '2026-10-05T10:02:00Z', isSidechain: true, message: { model: 'haiku', stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } } }
+  ]);
+
+  const now = 1_700_000_000_000;
+  const agentPath = path.join(fx.subagentsDir, 'agent-worker.jsonl');
+  // Twelve hours old: there is no time limit while the agent still works.
+  await fx.setMtimes([
+    [fx.transcriptPath, 0],
+    [agentPath, -12 * 3600_000]
+  ]);
+
+  const runningStatus = await gatherSessionStatus({
+    claudeHome: path.join(fx.tmpDir, '.claude'),
+    projectPath: fx.projectPath,
+    sessionId: fx.sessionId,
+    now
+  });
+  assert.equal(runningStatus.state, 'running', 'a running sub-agent keeps the card running');
+  assert.match(
+    formatStatusMessage({ sessionName: 'claude-x', alive: true, status: runningStatus, now }),
+    /🟢 Running/
+  );
+
+  // A terminal stop_reason marks the agent finished; it must not hold the card running.
+  await fx.writeAgent('worker', [
+    { type: 'assistant', timestamp: '2026-10-05T10:02:00Z', isSidechain: true, message: { model: 'haiku', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } } }
+  ]);
+  const stoppedStatus = await gatherSessionStatus({
+    claudeHome: path.join(fx.tmpDir, '.claude'),
+    projectPath: fx.projectPath,
+    sessionId: fx.sessionId,
+    now
+  });
+  assert.equal(stoppedStatus.state, 'stopped', 'a finished sub-agent does not override the ended turn');
+});
+
+test('a running sub-agent keeps a live session running even with no main transcript', async () => {
+  const fx = await makeFixture({ sessionId: 'sess-sub-cold' });
+  await fx.writeAgent('worker', [
+    { type: 'assistant', timestamp: '2026-10-05T10:02:00Z', isSidechain: true, message: { model: 'haiku', usage: { input_tokens: 1, output_tokens: 1 } } }
+  ]);
+
+  const now = 1_700_000_000_000;
+  await fx.setMtimes([[path.join(fx.subagentsDir, 'agent-worker.jsonl'), 20_000]]);
+
+  const status = await gatherSessionStatus({
+    claudeHome: path.join(fx.tmpDir, '.claude'),
+    projectPath: fx.projectPath,
+    sessionId: fx.sessionId,
+    now
+  });
+  assert.equal(status.transcriptFound, false);
+  assert.equal(status.state, 'running');
+  assert.match(
+    formatStatusMessage({ sessionName: 'claude-x', alive: true, status, now }),
+    /🟢 Running/
+  );
 });

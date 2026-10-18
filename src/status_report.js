@@ -6,11 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveClaudeProjectDir, findLatestJsonlFile } from './tmux/session_reader.js';
 
-// An agent transcript untouched for longer than this counts as finished:
-// side-chain files have no portable completion marker (launch returns the
-// parent's tool_result at once), so freshness is a mtime heuristic.
-export const RUNNING_WINDOW_MS = 5 * 60_000;
-// Upper bound of running agents listed in the message before "…and N more".
+// An agent transcript can be many MB; the whole file is parsed once per poll.
 export const MAX_LISTED_AGENTS = 10;
 // Only the tail of the main transcript is scanned for the current model:
 // transcripts can be many MB, and the first record already gives the start.
@@ -222,6 +218,8 @@ async function parseAgentTranscript(filePath) {
   let outputTokens = 0;
   let model = null;
   let effort = null;
+  let lastAssistantStop = null;
+  let sawAssistant = false;
 
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
@@ -239,6 +237,8 @@ async function parseAgentTranscript(filePath) {
       }
     }
     if (record.type === 'assistant' && record.message) {
+      sawAssistant = true;
+      lastAssistantStop = record.message.stop_reason ?? null;
       const usage = record.message.usage;
       if (usage) {
         inputTokens += Number(usage.input_tokens) || 0;
@@ -252,16 +252,23 @@ async function parseAgentTranscript(filePath) {
     }
   }
 
-  return { startMs, lastMs, inputTokens, outputTokens, model, effort };
+  // Side-chain transcripts have no result record. The last assistant
+  // stop_reason is the portable completion marker: a terminal reason ends the
+  // agent, anything else (tool_use, null) keeps it working. An agent with no
+  // assistant record yet has just started and still runs.
+  const finished = sawAssistant && TURN_END_REASONS.has(lastAssistantStop);
+
+  return { startMs, lastMs, inputTokens, outputTokens, model, effort, finished };
 }
 
 function agentIdFromFileName(fileName) {
   return fileName.replace(/^agent-/, '').replace(/\.jsonl$/, '');
 }
 
-// Side-chain records: fresh (mtime inside the window) agents are parsed and
-// counted as running; stale ones only count as finished.
-async function gatherSubAgents(projectDir, effectiveId, now) {
+// Side-chain records: the last assistant stop_reason decides running versus
+// finished. There is no time limit: a sub-agent that works for hours stays
+// running until its transcript shows a terminal stop_reason.
+async function gatherSubAgents(projectDir, effectiveId) {
   const agentsDir = path.join(projectDir, effectiveId, 'subagents');
   const running = [];
   let finishedCount = 0;
@@ -279,17 +286,17 @@ async function gatherSubAgents(projectDir, effectiveId, now) {
   for (const fileName of files) {
     const filePath = path.join(agentsDir, fileName);
     try {
-      const stat = await fs.stat(filePath);
-      if (now - stat.mtimeMs > RUNNING_WINDOW_MS) {
-        finishedCount++;
-        continue;
-      }
       const parsed = await parseAgentTranscript(filePath);
       if (!parsed) {
         finishedCount++;
         continue;
       }
-      running.push({ agentId: agentIdFromFileName(fileName), ...parsed });
+      const { finished, ...agent } = parsed;
+      if (finished) {
+        finishedCount++;
+        continue;
+      }
+      running.push({ agentId: agentIdFromFileName(fileName), ...agent });
     } catch {
       finishedCount++;
     }
@@ -361,21 +368,26 @@ export async function gatherSessionStatus({ claudeHome, projectPath, sessionId, 
     stat = await fs.stat(transcriptPath);
   } catch {
     // The bound file may not exist yet, but side-chain records can still exist
-    const sub = await gatherSubAgents(projectDir, effectiveId, now).catch(
+    const sub = await gatherSubAgents(projectDir, effectiveId).catch(
       () => ({ running: [], finishedCount: 0, totalCount: 0 })
     );
-    return { ...empty, running: sub.running, finishedCount: sub.finishedCount, totalCount: sub.totalCount };
+    // A running sub-agent means work continues even with no main transcript.
+    const state = sub.running.length > 0 ? 'running' : 'stopped';
+    return { ...empty, state, running: sub.running, finishedCount: sub.finishedCount, totalCount: sub.totalCount };
   }
 
-  const [sessionStart, model, effort, state, sub] = await Promise.all([
+  const [sessionStart, model, effort, tailState, sub] = await Promise.all([
     readFirstLineTimestamp(transcriptPath),
     readTailModel(transcriptPath),
     readTailEffort(transcriptPath),
     readTailState(transcriptPath),
-    gatherSubAgents(projectDir, effectiveId, now).catch(
+    gatherSubAgents(projectDir, effectiveId).catch(
       () => ({ running: [], finishedCount: 0, totalCount: 0 })
     )
   ]);
+
+  // The main turn can wait while a sub-agent still works: report running.
+  const state = sub.running.length > 0 ? 'running' : tailState;
 
   return {
     transcriptFound: true,
