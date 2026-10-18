@@ -82,6 +82,12 @@ const TURN_END_REASONS = new Set(['end_turn', 'max_tokens', 'stop_sequence', 're
 // record itself is the end-of-turn signal. Claude now waits for the user.
 const INTERRUPT_MARKER = /^\s*\[Request interrupted by user/;
 
+// Claude Code writes its own notices into the transcript as user turns: a
+// finished background task, a hook reminder, a slash-command record. They are
+// not typed input, so the reader never reports them as a user event.
+const SYSTEM_INJECTED_USER_RECORD =
+  /<(?:task-notification|system-reminder|local-command-caveat|command-name|command-args)\b/;
+
 // How much of a transcript's tail is scanned for a question Claude is waiting
 // on. Nothing is written after such a question, so it sits at the very end of
 // the file. 1 MB is far more than one turn, and a transcript grows to many
@@ -236,11 +242,11 @@ export class ClaudeSessionReader {
               : Array.isArray(entry.message.content)
                 ? entry.message.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
                 : '';
-            // Ignore system caveats, local commands, and empty content
-            if (raw && !raw.includes('<local-command-caveat>') && !raw.includes('<command-name>')) {
+            // Ignore system-injected records, local commands, and empty content
+            if (raw && !SYSTEM_INJECTED_USER_RECORD.test(raw)) {
               events.push({ type: 'user', content: raw.trim() });
-              // The echo above stays, but an interrupt also ends the turn: the
-              // user event starts typing again, so the end must come after it.
+              // This record also ends the turn: the user event starts typing
+              // again, so the end must come after it.
               if (INTERRUPT_MARKER.test(raw)) {
                 events.push({ type: 'turn_end', subtype: 'interrupted' });
               }

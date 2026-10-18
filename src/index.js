@@ -59,8 +59,11 @@ export function createBot(config, deps = {}) {
   let typingTimer = null;
   let typingChatId = null;
   let typingIdleTicks = 0; // consecutive transport-idle readings while typing
-  let lastInjectedPrompt = null;
-  let lastInjectedTime = 0;
+  let typingSawWorking = false; // the turn reached 'working' before it went idle
+  // Quiet mode: Claude's text is held for the whole turn and sent once when
+  // Claude stops and waits for the user. Nothing streams during the turn.
+  let pendingTurnText = [];
+  let turnStopReported = false; // one stop notice per turn
   let activeQuestion = null;
   let questionEventCounter = 0;
   // Bumped on every switchActiveSession: reader callbacks capture their own
@@ -153,9 +156,16 @@ export function createBot(config, deps = {}) {
         } catch {
           status = null;
         }
-        if (status === 'idle') {
+        if (status === 'working') {
+          typingSawWorking = true;
+          typingIdleTicks = 0;
+        } else if (status === 'idle') {
           if (++typingIdleTicks >= 2) {
+            const sawWorking = typingSawWorking;
             stopTyping();
+            // A transport that never left idle did not finish a turn: it may
+            // still be starting. Only a turn that ran gets a stop notice.
+            if (sawWorking) await reportTurnStop(chatId);
             return;
           }
         } else {
@@ -176,6 +186,38 @@ export function createBot(config, deps = {}) {
     }
     typingChatId = null;
     typingIdleTicks = 0;
+    typingSawWorking = false;
+  }
+
+  // The one message a turn produces. The header names the event, the body is
+  // the final answer text. A reason that is not a normal stop is named too.
+  const STOP_NOTES = {
+    interrupted: '⏹️ *Claude Code stopped* (interrupted).',
+    max_tokens: '⚠️ *Claude Code stopped* (max tokens).',
+    refusal: '⚠️ *Claude Code stopped* (refusal).'
+  };
+
+  async function reportTurnStop(chatId, subtype = null) {
+    if (!chatId || turnStopReported) return;
+    turnStopReported = true;
+    const text = pendingTurnText.join('\n\n').trim();
+    pendingTurnText = [];
+    const note = STOP_NOTES[subtype]
+      || (typeof subtype === 'string' && subtype.startsWith('error')
+        ? '⚠️ *Claude Code stopped* (error).'
+        : null);
+    const head = note || '✅ *Claude Code stopped.*';
+    const full = text ? `${head}\n\n${text}` : head;
+    // A long answer still obeys Telegram's 4096-character message limit.
+    for (const chunk of splitTelegramMessage(full, 4000)) {
+      await sendWithFallback(bot, chatId, chunk);
+    }
+  }
+
+  // A new user turn replaces the held text and re-arms the stop notice.
+  function resetTurn() {
+    pendingTurnText = [];
+    turnStopReported = false;
   }
 
   // A dead tmux session must never receive injections or keep the typing
@@ -288,7 +330,7 @@ export function createBot(config, deps = {}) {
       activeSessionReader.stop();
       activeSessionReader = null;
     }
-    lastInjectedPrompt = null; // stale prompts must not suppress echoes in the new session
+    resetTurn(); // the outgoing turn's held text is not this session's answer
     // Question cards and "run with arguments" prompts belong to the outgoing
     // session: keeping them across switches would inject the old session's
     // keys/args into the new one.
@@ -348,27 +390,24 @@ export function createBot(config, deps = {}) {
           if (myEpoch !== readerEpoch) return; // superseded by a later switch
           if (!activeChatId) return;
           if (event.type === 'user' && event.content) {
-            // If the user prompt came from CLI (not recently sent from Telegram), echo to Telegram
-            const isSelf = lastInjectedPrompt === event.content && (Date.now() - lastInjectedTime) < 10000;
-            if (!isSelf) {
-              await sendWithFallback(bot, activeChatId, `👤 *CLI User:*\n${event.content}`);
-            }
+            // Quiet mode: a new turn starts here, but the prompt is not
+            // forwarded. The reader drops the records Claude injects itself.
+            resetTurn();
             startTyping(activeChatId);
           } else if (event.type === 'text' && event.content) {
-            // Text is narration, not the end of the turn: Claude keeps working
-            // after it. Keep the indicator on and recover it if a status poll
-            // stopped it early.
+            // Narration is held, not sent: Claude is still working. The turn's
+            // final answer leaves with the stop notice below.
+            pendingTurnText.push(event.content);
             startTyping(activeChatId);
-            // Send assistant text from session_reader as clean markdown text rather than wrapping in code fences (```)
-            const chunks = splitTelegramMessage(event.content, 4000);
-            for (const c of chunks) {
-              await sendWithFallback(bot, activeChatId, c);
-            }
           } else if (event.type === 'turn_end') {
             // The assistant ended the turn and now waits for the user.
             stopTyping();
+            await reportTurnStop(activeChatId, event.subtype);
           } else if (event.type === 'question' && event.content) {
             stopTyping();
+            // The card carries the question. Text above it is not the answer,
+            // and a stop after the answer must produce its own notice.
+            resetTurn();
             questionEventCounter++;
             const questions = normalizeQuestions(event.content);
             activeQuestion = {
@@ -382,6 +421,7 @@ export function createBot(config, deps = {}) {
           } else if (event.type === 'result') {
             // Turn ended (success or error), even with no final text block.
             stopTyping();
+            await reportTurnStop(activeChatId, event.subtype);
           }
         },
         config.pollIntervalMs,
@@ -1009,8 +1049,6 @@ export function createBot(config, deps = {}) {
     // tell Telegram prompts apart from locally typed ones. Slash passthrough stays raw.
     if (!(await ensureSessionAlive(ctx))) return;
     const injectText = text.startsWith('/') ? text : `Telegram user: ${text}`;
-    lastInjectedPrompt = injectText;
-    lastInjectedTime = Date.now();
     startTyping(ctx.chat.id);
     const answer = await io.sendText(activeTarget, injectText, true);
     // A refusal is not an error: the tab is up but did not take the write, and

@@ -555,23 +555,28 @@ test('result events from the reader stop the typing indicator', async () => {
 
   const messagesBefore = sentMessages.length;
 
-  // A user event starts typing
+  // A user event starts typing but is not forwarded
   await readerOnEvent({ type: 'user', content: 'CLI typed' });
   assert.equal(botInstance.getActiveState().typingActive, true);
+  assert.equal(sentMessages.length, messagesBefore, 'quiet mode: no prompt echo');
 
   // The turn ends without a final text block: the result event must stop typing
   await readerOnEvent({ type: 'result', subtype: 'success' });
   assert.equal(botInstance.getActiveState().typingActive, false);
 
-  // Result events must not be forwarded as chat text
-  assert.equal(sentMessages.length, messagesBefore + 1); // only the CLI user echo
+  // Result events produce exactly one short stop notice
+  assert.equal(sentMessages.length, messagesBefore + 1);
+  assert.equal(sentMessages[sentMessages.length - 1].text, '✅ *Claude Code stopped.*');
 
   botInstance.stop();
 });
 
-test('text events keep the typing indicator on; turn_end stops it', async () => {
+test('text events keep the typing indicator on; turn_end sends one stop notice', async () => {
   const mockBot = makeBotMock();
   const mockTmux = makeTmuxMock();
+
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
 
   let readerOnEvent = null;
   class MockReader {
@@ -593,18 +598,24 @@ test('text events keep the typing indicator on; turn_end stops it', async () => 
   await readerOnEvent({ type: 'user', content: 'do it' });
   assert.equal(botInstance.getActiveState().typingActive, true);
 
-  // Mid-turn narration: Claude is still working, so the indicator stays on.
+  // Mid-turn narration: Claude is still working, so nothing is sent.
   await readerOnEvent({ type: 'text', content: 'Let me read the file.' });
   assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays on through mid-turn text');
+  assert.equal(sentMessages.length, 0, 'narration is held, not sent');
 
   // The assistant ends the turn and waits for the user.
-  await readerOnEvent({ type: 'turn_end' });
+  await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
   assert.equal(botInstance.getActiveState().typingActive, false, 'turn_end stops typing');
+  assert.equal(sentMessages.length, 1, 'one stop notice');
+  assert.equal(
+    sentMessages[0].text,
+    '✅ *Claude Code stopped.*\n\nLet me read the file.'
+  );
 
   botInstance.stop();
 });
 
-test('plain text is injected with the Telegram user prefix and echo-suppressed', async () => {
+test('plain text is injected with the Telegram user prefix and stays quiet', async () => {
   const mockBot = makeBotMock();
 
   const sentKeys = [];
@@ -638,15 +649,131 @@ test('plain text is injected with the Telegram user prefix and echo-suppressed',
   assert.equal(sentKeys[0].keys, 'Telegram user: Hello bot');
   assert.equal(botInstance.getActiveState().typingActive, true);
 
-  // The transcript echo of the injected prompt is suppressed
+  // Neither the injected prompt echo nor a locally typed prompt is forwarded.
   const countAfterInject = sentMessages.length;
   await readerOnEvent({ type: 'user', content: 'Telegram user: Hello bot' });
-  assert.equal(sentMessages.length, countAfterInject);
-
-  // A locally typed prompt still echoes as CLI user
   await readerOnEvent({ type: 'user', content: 'locally typed' });
+  assert.equal(sentMessages.length, countAfterInject, 'quiet mode: no prompt echo');
+
+  // Only the stop notice leaves the bridge.
+  await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
   assert.equal(sentMessages.length, countAfterInject + 1);
-  assert.equal(sentMessages[sentMessages.length - 1].text, '👤 *CLI User:*\nlocally typed');
+  assert.equal(sentMessages[sentMessages.length - 1].text, '✅ *Claude Code stopped.*');
+
+  botInstance.stop();
+});
+
+test('an interrupted turn sends one interrupted stop notice', async () => {
+  const mockBot = makeBotMock();
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  await readerOnEvent({ type: 'user', content: '[Request interrupted by user]' });
+  await readerOnEvent({ type: 'turn_end', subtype: 'interrupted' });
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].text, '⏹️ *Claude Code stopped* (interrupted).');
+
+  botInstance.stop();
+});
+
+test('turn_end and result produce one stop notice per turn', async () => {
+  const mockBot = makeBotMock();
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  await readerOnEvent({ type: 'user', content: 'go' });
+  await readerOnEvent({ type: 'text', content: 'Done.' });
+  await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
+  await readerOnEvent({ type: 'result', subtype: 'success' });
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].text, '✅ *Claude Code stopped.*\n\nDone.');
+
+  botInstance.stop();
+});
+
+test('a failed result is named as an error stop', async () => {
+  const mockBot = makeBotMock();
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  await readerOnEvent({ type: 'user', content: 'go' });
+  await readerOnEvent({ type: 'result', subtype: 'error_during_execution' });
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].text, '⚠️ *Claude Code stopped* (error).');
+
+  botInstance.stop();
+});
+
+test('a question card is the only message while Claude waits for an answer', async () => {
+  const mockBot = makeBotMock();
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  await readerOnEvent({ type: 'user', content: 'do it' });
+  await readerOnEvent({ type: 'text', content: 'I need one detail.' });
+  await readerOnEvent({
+    type: 'question',
+    content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
+  });
+
+  assert.equal(sentMessages.length, 1, 'only the question card is sent');
+  assert.ok(sentMessages[0].text.includes('Pick one:'));
+  assert.ok(!sentMessages[0].text.includes('I need one detail.'));
 
   botInstance.stop();
 });

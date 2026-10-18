@@ -148,6 +148,34 @@ test('ClaudeSessionReader extracts assistant text and AskUserQuestion calls', as
   assert.equal(events[3].content, 'Another text.');
 });
 
+test('ClaudeSessionReader never reports system-injected user records', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-injected-'));
+  const projectPath = path.resolve(tmpDir, 'test-project-injected');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-injected.jsonl');
+
+  // A finished background task and a hook reminder are both user records.
+  const taskNotification = [
+    '<task-notification>',
+    '<task-id>a132e9a100aeee</task-id>',
+    '<status>completed</status>',
+    '<summary>Agent "Execute plan" finished</summary>',
+    '</task-notification>'
+  ].join('\n');
+  const lines = [
+    JSON.stringify({ type: 'user', message: { content: taskNotification } }),
+    JSON.stringify({ type: 'user', message: { content: '<system-reminder>Be brief.</system-reminder>' } }),
+    JSON.stringify({ type: 'user', message: { content: 'A real typed prompt' } })
+  ];
+  await fs.writeFile(sessionFile, lines.join('\n') + '\n');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const events = await reader.readNewEvents(projectPath);
+
+  assert.deepEqual(events, [{ type: 'user', content: 'A real typed prompt' }]);
+});
+
 test('ClaudeSessionReader.start polls and streams events continuously', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-test-start-'));
   const projectPath = path.resolve(tmpDir, 'test-project-stream');
