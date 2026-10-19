@@ -178,7 +178,7 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
   }
 
   // 'working' | 'idle' | null. A tmux session has no cheap probe: the reader's
-  // events drive the typing indicator there.
+  // events drive the turn monitor there.
   async function status(target) {
     if (target.kind === 'tmux') return null;
     // An unreadable status is unknown, which is the same answer as null.

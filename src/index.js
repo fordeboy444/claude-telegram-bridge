@@ -56,11 +56,18 @@ export function createBot(config, deps = {}) {
   let cachedSkills = [];
   let skillByHash = new Map();
   let commandMapping = new Map();
-  let typingTimer = null;
-  let typingChatId = null;
-  let typingIdleTicks = 0; // consecutive transport-idle readings while typing
+  // Two independent concerns share the old "typing" state:
+  //   • the typing indicator is a short visual window that follows output.
+  //   • the turn monitor watches the transport for a stop, a permission wait,
+  //     or session death. It runs for the whole turn and sends no chat action.
+  // Keeping them apart is what stops a long tool call from showing "typing"
+  // for minutes with no message in the chat.
+  let typingTimer = null; // indicator hold timer (short-lived)
+  let monitorTimer = null; // turn monitor ticker
+  let monitorChatId = null;
+  let typingIdleTicks = 0; // consecutive transport-idle readings while monitoring
   let typingSawWorking = false; // the turn reached 'working' before it went idle
-  let typingPermissionTicks = 0; // consecutive 'permission' readings while typing
+  let typingPermissionTicks = 0; // consecutive 'permission' readings while monitoring
   let inputNotified = false; // one needs-input alert per turn
   let pendingStopSubtype = null; // the subtype the next stop notice names
   // Claude's output streams through at once, but silently. Only the stop
@@ -174,92 +181,118 @@ export function createBot(config, deps = {}) {
   const PERMISSION_SETTLE_SAMPLES = 2;
   const IDLE_SETTLE_SAMPLES = 3;
 
-  function startTyping(chatId) {
+  // The indicator reports ONE thing: output is reaching the chat. It starts
+  // on an output event and expires a short hold later, so a long tool call
+  // shows no "typing…" while the chat is quiet.
+  function noteOutputActivity(chatId) {
     if (!chatId) return;
-    if (typingTimer) {
-      if (typingChatId === chatId) return;
-      clearInterval(typingTimer);
-    }
-    typingChatId = chatId;
-    typingIdleTicks = 0;
-    typingPermissionTicks = 0;
-    const sendTyping = async () => {
-      if (activeTarget) {
-        let alive = null;
-        try {
-          alive = await io.isAlive(activeTarget);
-        } catch {
-          alive = null;
-        }
-        // A transport error is not proof of death. Only an explicit "gone"
-        // ends the session; an unknown answer keeps the turn alive.
-        if (alive === false) {
-          await notifySessionDeath(chatId);
-          return;
-        }
-
-        // Orca's own status is the authority on a tab: 'working' means it will
-        // continue by itself, 'permission' means it waits on the user, and null
-        // means it cannot say. Claude Code 2.1.302 writes no end-of-turn
-        // record, so no transcript reading can beat this signal.
-        let status = null;
-        try {
-          status = await io.status(activeTarget);
-        } catch {
-          status = null;
-        }
-        if (status === 'working') {
-          typingSawWorking = true;
-          typingIdleTicks = 0;
-          typingPermissionTicks = 0;
-          // The user answered: a later prompt in the same turn is new.
-          inputNotified = false;
-        } else if (status === 'permission') {
-          typingSawWorking = true;
-          typingIdleTicks = 0;
-          if (++typingPermissionTicks >= PERMISSION_SETTLE_SAMPLES && !inputNotified) {
-            inputNotified = true;
-            await sendWithFallback(bot, chatId, '✋ *Claude Code needs your input.*');
-          }
-        } else if (status === 'idle') {
-          typingPermissionTicks = 0;
-          if (++typingIdleTicks >= IDLE_SETTLE_SAMPLES) {
-            const sawWorking = typingSawWorking;
-            // A background task resumes the turn by itself, so an idle reading
-            // is a pause. Keep the indicator on and wait for the real stop.
-            if (sawWorking && await sessionHasPendingWork()) {
-              typingIdleTicks = 0;
-            } else {
-              stopTyping();
-              // A turn the user stopped on purpose needs no alert.
-              if (sawWorking && pendingStopSubtype !== 'interrupted') {
-                await reportTurnStop(chatId, pendingStopSubtype);
-              }
-              return;
-            }
-          }
-        } else {
-          // Unknown: never notify. Keep waiting for a status that settles.
-          typingIdleTicks = 0;
-          typingPermissionTicks = 0;
-        }
-      }
-      bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
-    };
-    sendTyping();
-    typingTimer = setInterval(sendTyping, config.typingIntervalMs ?? 4000);
+    // One action buys about five seconds of "typing…" in Telegram. The next
+    // output event refreshes it. A quiet turn lets it expire.
+    bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+    if (typingTimer) clearTimeout(typingTimer);
+    typingTimer = setTimeout(stopTypingIndicator, config.typingHoldMs ?? 3000);
     if (typingTimer.unref) typingTimer.unref();
   }
 
-  function stopTyping() {
+  function stopTypingIndicator() {
     if (typingTimer) {
-      clearInterval(typingTimer);
+      clearTimeout(typingTimer);
       typingTimer = null;
     }
-    typingChatId = null;
+  }
+
+  // The turn monitor decides when a turn really stopped, waits on the user,
+  // or died. It runs for the whole turn and sends no chat action.
+  function startTurnMonitor(chatId) {
+    if (!chatId) return;
+    if (monitorTimer) {
+      if (monitorChatId === chatId) return;
+      clearInterval(monitorTimer);
+    }
+    monitorChatId = chatId;
+    typingIdleTicks = 0;
+    typingPermissionTicks = 0;
+    const sample = async () => {
+      if (!activeTarget) return;
+      let alive = null;
+      try {
+        alive = await io.isAlive(activeTarget);
+      } catch {
+        alive = null;
+      }
+      // A transport error is not proof of death. Only an explicit "gone"
+      // ends the session; an unknown answer keeps the turn alive.
+      if (alive === false) {
+        await notifySessionDeath(chatId);
+        return;
+      }
+
+      // Orca's own status is the authority on a tab: 'working' means it will
+      // continue by itself, 'permission' means it waits on the user, and null
+      // means it cannot say. Claude Code 2.1.302 writes no end-of-turn
+      // record, so no transcript reading can beat this signal.
+      let status = null;
+      try {
+        status = await io.status(activeTarget);
+      } catch {
+        status = null;
+      }
+      if (status === 'working') {
+        typingSawWorking = true;
+        typingIdleTicks = 0;
+        typingPermissionTicks = 0;
+        // The user answered: a later prompt in the same turn is new.
+        inputNotified = false;
+      } else if (status === 'permission') {
+        typingSawWorking = true;
+        typingIdleTicks = 0;
+        if (++typingPermissionTicks >= PERMISSION_SETTLE_SAMPLES && !inputNotified) {
+          inputNotified = true;
+          await sendWithFallback(bot, chatId, '✋ *Claude Code needs your input.*');
+        }
+      } else if (status === 'idle') {
+        typingPermissionTicks = 0;
+        if (++typingIdleTicks >= IDLE_SETTLE_SAMPLES) {
+          const sawWorking = typingSawWorking;
+          // A background task resumes the turn by itself, so an idle reading
+          // is a pause. Keep monitoring and wait for the real stop.
+          if (sawWorking && await sessionHasPendingWork()) {
+            typingIdleTicks = 0;
+          } else {
+            stopTyping();
+            // A turn the user stopped on purpose needs no alert.
+            if (sawWorking && pendingStopSubtype !== 'interrupted') {
+              await reportTurnStop(chatId, pendingStopSubtype);
+            }
+            return;
+          }
+        }
+      } else {
+        // Unknown: never notify. Keep waiting for a status that settles.
+        typingIdleTicks = 0;
+        typingPermissionTicks = 0;
+      }
+    };
+    sample();
+    monitorTimer = setInterval(sample, config.typingIntervalMs ?? 4000);
+    if (monitorTimer.unref) monitorTimer.unref();
+  }
+
+  function stopTurnMonitor() {
+    if (monitorTimer) {
+      clearInterval(monitorTimer);
+      monitorTimer = null;
+    }
+    monitorChatId = null;
     typingIdleTicks = 0;
     typingPermissionTicks = 0;
     typingSawWorking = false;
+  }
+
+  // Both concerns end together when the turn ends or the session changes.
+  function stopTyping() {
+    stopTypingIndicator();
+    stopTurnMonitor();
   }
 
   // The stop notice. Its text already reached the chat, silently, so this
@@ -487,14 +520,16 @@ export function createBot(config, deps = {}) {
             // Quiet mode: a new turn starts here, but the prompt is not
             // forwarded. The reader drops the records Claude injects itself.
             resetTurn();
-            startTyping(activeChatId);
+            startTurnMonitor(activeChatId);
           } else if (event.type === 'text' && event.content) {
             // Send the output at once, silently. Only the stop notice and a
-            // question card notify the user.
+            // question card notify the user. This is the one event that drives
+            // the typing indicator: output is what the indicator reports.
+            noteOutputActivity(activeChatId);
             for (const chunk of splitTelegramMessage(event.content, 4000)) {
               await sendWithFallback(bot, activeChatId, chunk, { disable_notification: true });
             }
-            startTyping(activeChatId);
+            startTurnMonitor(activeChatId);
           } else if (event.type === 'turn_end') {
             if (activeTarget?.kind === 'orca') {
               // The tab's status owns the verdict. Remember the reason and let
@@ -503,11 +538,11 @@ export function createBot(config, deps = {}) {
               pendingStopSubtype = event.subtype;
               // The record proves a turn ran, even when no sample saw it.
               typingSawWorking = true;
-              startTyping(activeChatId);
+              startTurnMonitor(activeChatId);
             } else if (event.subtype !== 'interrupted' && (await sessionHasPendingWork() || await transportIsRunning() === true)) {
-              // A turn that pauses for background work is not a stop: keep the
-              // indicator on and send no notice. Claude resumes by itself.
-              startTyping(activeChatId);
+              // A turn that pauses for background work is not a stop: keep
+              // monitoring and send no notice. Claude resumes by itself.
+              startTurnMonitor(activeChatId);
             } else {
               // The assistant ended the turn and now waits for the user.
               stopTyping();
@@ -705,7 +740,7 @@ export function createBot(config, deps = {}) {
       return ctx.reply('⚠️ No active Claude session. Use /projects to start one first.');
     }
 
-    startTyping(ctx.chat?.id);
+    startTurnMonitor(ctx.chat?.id);
     const answer = await io.sendText(activeTarget, skill.command, true);
     if (!answer.accepted) {
       stopTyping();
@@ -738,7 +773,7 @@ export function createBot(config, deps = {}) {
     }
 
     const fullCmd = `${skill.command} ${ctx.match[2]}`;
-    startTyping(ctx.chat?.id);
+    startTurnMonitor(ctx.chat?.id);
     const answer = await io.sendText(activeTarget, fullCmd, true);
     if (!answer.accepted) {
       stopTyping();
@@ -810,7 +845,7 @@ export function createBot(config, deps = {}) {
     await switchActiveSession(target, ctx.chat.id, tab.projectPath);
     // A tab that is working will continue; a tab that waits on the user must
     // be able to say so. Only an idle tab starts silent.
-    if (tab.status === 'working' || tab.status === 'permission') startTyping(ctx.chat.id);
+    if (tab.status === 'working' || tab.status === 'permission') startTurnMonitor(ctx.chat.id);
 
     await ctx.answerCbQuery(`Joined ${tab.cleanTitle}`).catch(() => {});
     // One message, and no history: the reader adopts the transcript at its
@@ -993,7 +1028,7 @@ export function createBot(config, deps = {}) {
     const question = activeQuestion;
     activeQuestion = null;
     const counterAtStart = questionEventCounter;
-    startTyping(ctx.chat?.id);
+    startTurnMonitor(ctx.chat?.id);
 
     const keys = buildAnswerKeys(question.questions, question.answers);
     const sent = await io.sendKeys(activeTarget, keys, 300);
@@ -1109,7 +1144,7 @@ export function createBot(config, deps = {}) {
         return ctx.reply('⚠️ No active Claude session. Use /projects to start one.');
       }
       if (!(await ensureSessionAlive(ctx))) return;
-      startTyping(ctx.chat.id);
+      startTurnMonitor(ctx.chat.id);
       const answer = await io.sendText(activeTarget, fullCommand, true);
       if (!answer.accepted) {
         stopTyping();
@@ -1172,7 +1207,7 @@ export function createBot(config, deps = {}) {
     // tell Telegram prompts apart from locally typed ones. Slash passthrough stays raw.
     if (!(await ensureSessionAlive(ctx))) return;
     const injectText = text.startsWith('/') ? text : `Telegram user: ${text}`;
-    startTyping(ctx.chat.id);
+    startTurnMonitor(ctx.chat.id);
     const answer = await io.sendText(activeTarget, injectText, true);
     // A refusal is not an error: the tab is up but did not take the write, and
     // bytesWritten is 0. Say so instead of leaving the indicator running.
@@ -1202,7 +1237,8 @@ export function createBot(config, deps = {}) {
       activeChatId,
       activeProjectPath,
       pendingArgsSkill,
-      typingActive: Boolean(typingTimer)
+      typingActive: Boolean(typingTimer),
+      monitorActive: Boolean(monitorTimer)
     }),
     stop: () => {
       stopTyping();

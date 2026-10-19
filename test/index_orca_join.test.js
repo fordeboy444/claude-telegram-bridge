@@ -240,7 +240,7 @@ test('text sent after joining goes to the tab with enter:true', async () => {
   h.api.stop();
 });
 
-test('joining starts the typing indicator when the tab is working', async () => {
+test('joining starts the turn monitor, not the typing indicator, when the tab is working', async () => {
   const h = await makeHarness({
     records: [tabRecord({ handle: 'term_a' })],
     statuses: { term_a: { isRunningAgent: true, status: 'working' } }
@@ -248,7 +248,10 @@ test('joining starts the typing indicator when the tab is working', async () => 
 
   await dispatch(h, 'orca_tab:', ['orca_tab:term_a', 'term_a']);
 
-  assert.equal(h.api.getActiveState().typingActive, true);
+  // A working tab may resume by itself, so it needs the monitor. It has not
+  // sent a message to the chat, so the typing indicator stays off.
+  assert.equal(h.api.getActiveState().monitorActive, true);
+  assert.equal(h.api.getActiveState().typingActive, false);
 
   h.api.stop();
 });
@@ -264,21 +267,22 @@ async function waitFor(predicate, { timeoutMs = 2000, stepMs = 10 } = {}) {
   return false;
 }
 
-test('typing stops when the tab goes idle with nothing left to report', async () => {
+test('the turn monitor stops when the tab goes idle with nothing left to report', async () => {
   const statuses = { term_a: { isRunningAgent: true, status: 'working' } };
   const h = await makeHarness({ records: [tabRecord({ handle: 'term_a' })], statuses });
 
   await dispatch(h, 'orca_tab:', ['orca_tab:term_a', 'term_a']);
-  assert.equal(h.api.getActiveState().typingActive, true);
+  assert.equal(h.api.getActiveState().monitorActive, true);
+  assert.equal(h.api.getActiveState().typingActive, false);
 
   // The turn ends with no text and no question. Nothing on the transcript
-  // stops the indicator, so the tab's own idle state must. Two readings in a
-  // row are required, so this takes two 4s ticks.
+  // stops the monitor, so the tab's own idle state must. Three readings in a
+  // row are required, so this takes three 4s ticks.
   h.orca.statuses.term_a = { isRunningAgent: true, status: 'idle' };
 
   assert.ok(
-    await waitFor(() => h.api.getActiveState().typingActive === false, { timeoutMs: 15000 }),
-    'typing must stop on a sustained idle report'
+    await waitFor(() => h.api.getActiveState().monitorActive === false, { timeoutMs: 15000 }),
+    'the monitor must stop on a sustained idle report'
   );
 
   h.api.stop();

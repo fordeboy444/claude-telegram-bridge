@@ -30,8 +30,11 @@ export function loadConfig(env = process.env) {
     claudeHome: env.CLAUDE_HOME || path.join(os.homedir(), '.claude'),
     tmuxPath: env.TMUX_PATH || 'tmux',
     pollIntervalMs: Number(env.POLL_INTERVAL_MS) || 1000,
-    // How often the typing loop samples the transport status. The same loop
+    // How often the turn monitor samples the transport status. The monitor
     // decides when a status has settled enough to notify.
-    typingIntervalMs: Number(env.TYPING_INTERVAL_MS) || 4000
+    typingIntervalMs: Number(env.TYPING_INTERVAL_MS) || 4000,
+    // How long the typing indicator stays on after the last output event.
+    // Output is what the indicator reports, not the whole turn.
+    typingHoldMs: Number(env.TYPING_HOLD_MS) || 3000
   };
 }

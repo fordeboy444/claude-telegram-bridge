@@ -12,6 +12,17 @@ import {
 } from './helpers.js';
 import { getProjectSlug } from '../src/tmux/session_reader.js';
 
+// Wait until the condition holds, or give up and let the assertion fail with a
+// real message. Same helper as test/session_reader.test.js.
+async function waitFor(predicate, { timeoutMs = 2000, stepMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return false;
+}
+
 test('createBot initializes Telegraf instance with middleware, setMyCommands, and handlers', async () => {
   let commandsSet = null;
   const commandScopes = [];
@@ -451,7 +462,9 @@ test('text handler auto-attaches to single running session when activeSessionNam
   assert.equal(sentKeys[0].session, 'claude-auto-project');
   assert.equal(sentKeys[0].keys, 'Telegram user: Hello from Telegram');
   assert.ok(replies.some(r => r.includes('Auto-connected to active session')));
-  assert.ok(chatActions.some(a => a.action === 'typing'));
+  // Injection starts the turn monitor; the indicator waits for output.
+  assert.equal(botInstance.getActiveState().monitorActive, true);
+  assert.equal(chatActions.length, 0, 'no typing action before output');
 
   botInstance.stop();
 });
@@ -544,7 +557,10 @@ test('result events from the reader stop the typing indicator', async () => {
     stop() {}
   }
 
-  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+  const botInstance = createBot(defaultTestConfig({
+    allowedUserIds: ['111'],
+    typingHoldMs: 60000
+  }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -555,17 +571,18 @@ test('result events from the reader stop the typing indicator', async () => {
 
   const messagesBefore = sentMessages.length;
 
-  // A user event starts typing but is not forwarded
-  await readerOnEvent({ type: 'user', content: 'CLI typed' });
+  // Output starts the indicator but is not forwarded as a prompt echo.
+  await readerOnEvent({ type: 'text', content: 'Working.' });
   assert.equal(botInstance.getActiveState().typingActive, true);
-  assert.equal(sentMessages.length, messagesBefore, 'quiet mode: no prompt echo');
+  assert.equal(sentMessages.length, messagesBefore + 1, 'output is sent');
 
   // The turn ends without a final text block: the result event must stop typing
   await readerOnEvent({ type: 'result', subtype: 'success' });
   assert.equal(botInstance.getActiveState().typingActive, false);
+  assert.equal(botInstance.getActiveState().monitorActive, false);
 
   // Result events produce exactly one short stop notice
-  assert.equal(sentMessages.length, messagesBefore + 1);
+  assert.equal(sentMessages.length, messagesBefore + 2);
   assert.equal(sentMessages[sentMessages.length - 1].text, '✅ *Claude Code stopped.*');
 
   botInstance.stop();
@@ -596,13 +613,15 @@ test('text events stream silently; turn_end sends one notifying stop notice', as
 
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
-  // A user turn starts the indicator.
+  // The prompt opens the turn: the monitor runs, but no chat output exists yet.
   await readerOnEvent({ type: 'user', content: 'do it' });
-  assert.equal(botInstance.getActiveState().typingActive, true);
+  assert.equal(botInstance.getActiveState().monitorActive, true);
+  assert.equal(botInstance.getActiveState().typingActive, false, 'no typing before output');
 
-  // Mid-turn narration is sent at once, but with no notification.
+  // Mid-turn narration is sent at once, but with no notification. Output is
+  // what turns the typing indicator on.
   await readerOnEvent({ type: 'text', content: 'Let me read the file.' });
-  assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays on through mid-turn text');
+  assert.equal(botInstance.getActiveState().typingActive, true, 'output starts typing');
   assert.equal(sentMessages.length, 1, 'narration is sent');
   assert.equal(sentMessages[0].text, 'Let me read the file.');
   assert.equal(sentMessages[0].extra.disable_notification, true, 'narration is silent');
@@ -613,6 +632,47 @@ test('text events stream silently; turn_end sends one notifying stop notice', as
   assert.equal(sentMessages.length, 2, 'one stop notice, no repeated answer');
   assert.equal(sentMessages[1].text, '✅ *Claude Code stopped.*');
   assert.notEqual(sentMessages[1].extra?.disable_notification, true, 'stop notice notifies');
+
+  botInstance.stop();
+});
+
+test('the typing indicator follows output, not the whole turn', async () => {
+  const mockBot = makeBotMock();
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+  }
+
+  // A short hold and tick keep the test fast. The point is the relation: the
+  // indicator must expire while the turn is still open.
+  const botInstance = createBot(defaultTestConfig({
+    allowedUserIds: ['111'],
+    typingIntervalMs: 10,
+    typingHoldMs: 30
+  }), {
+    bot: mockBot,
+    tmux: makeTmuxMock(),
+    sessionReaderClass: MockReader
+  });
+
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  // The prompt opens the turn, but the agent has produced no chat output yet.
+  await readerOnEvent({ type: 'user', content: 'do it' });
+  assert.equal(botInstance.getActiveState().typingActive, false, 'no typing before output');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'the turn is monitored');
+
+  // Output starts the indicator.
+  await readerOnEvent({ type: 'text', content: 'Working on it.' });
+  assert.equal(botInstance.getActiveState().typingActive, true, 'typing while output arrives');
+
+  // Now the agent runs a long tool call: no message reaches the chat. The
+  // indicator must go away even though the turn has not ended.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops when output stops');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'the turn is still monitored');
 
   botInstance.stop();
 });
@@ -634,7 +694,10 @@ test('a turn that pauses for a running sub-agent sends no stop notice', async ()
     async hasPendingWork() { return true; }
   }
 
-  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+  const botInstance = createBot(defaultTestConfig({
+    allowedUserIds: ['111'],
+    typingHoldMs: 10
+  }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: MockReader
@@ -648,8 +711,13 @@ test('a turn that pauses for a running sub-agent sends no stop notice', async ()
 
   await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
 
+  // Let the short typing hold expire: the turn continues, but it sends
+  // nothing to the chat.
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
   assert.equal(sentMessages.length, before, 'no false stop notice');
-  assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays on while work runs');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'the turn is still monitored');
+  assert.equal(botInstance.getActiveState().typingActive, false, 'no typing while no output arrives');
 
   botInstance.stop();
 });
@@ -713,12 +781,13 @@ test('plain text is injected with the Telegram user prefix and stays quiet', asy
 
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
-  // Telegram text is injected with the prefix and starts typing
+  // Telegram text is injected with the prefix and opens the turn monitor.
   await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'Hello bot' }, reply: async () => {} });
 
   assert.equal(sentKeys.length, 1);
   assert.equal(sentKeys[0].keys, 'Telegram user: Hello bot');
-  assert.equal(botInstance.getActiveState().typingActive, true);
+  assert.equal(botInstance.getActiveState().monitorActive, true);
+  assert.equal(botInstance.getActiveState().typingActive, false, 'no typing before output');
 
   // Neither the injected prompt echo nor a locally typed prompt is forwarded.
   const countAfterInject = sentMessages.length;
@@ -1057,7 +1126,7 @@ test('incoming text to a dead session clears the connection and reports the ende
   botInstance.stop();
 });
 
-test('typing starts on qa answer, skill_run_now, and skill args completion', async () => {
+test('the turn monitor starts on qa answer, skill_run_now, and skill args completion', async () => {
   const mockBot = makeBotMock();
 
   const mockTmux = makeTmuxMock();
@@ -1084,7 +1153,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
   const skillRunArgs = actionHandler(mockBot, 'skill_run_args');
 
   // Arm the question card, then answer via the qa action (single-choice tap
-  // submits immediately and must start typing).
+  // submits immediately and must start the monitor).
   readerOnEvent({
     type: 'question',
     content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
@@ -1095,8 +1164,8 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
     answerCbQuery: async () => {},
     reply: async () => {}
   });
-  assert.equal(botInstance.getActiveState().typingActive, true, 'answer_q must start typing');
-  await readerOnEvent({ type: 'result' }); // stop typing for the next case
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'answer_q must start the monitor');
+  await readerOnEvent({ type: 'result' }); // stop the monitor for the next case
 
   // skill_run_now path
   await skillRunNow({
@@ -1105,7 +1174,7 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
     answerCbQuery: async () => {},
     reply: async () => {}
   });
-  assert.equal(botInstance.getActiveState().typingActive, true, 'skill_run_now must start typing');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'skill_run_now must start the monitor');
   await readerOnEvent({ type: 'result' });
 
   // skill args completion path (skill_run_args arms it, the next text completes it)
@@ -1116,17 +1185,18 @@ test('typing starts on qa answer, skill_run_now, and skill args completion', asy
     reply: async () => {}
   });
   await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'extra args' }, reply: async () => {} });
-  assert.equal(botInstance.getActiveState().typingActive, true, 'args completion must start typing');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'args completion must start the monitor');
 
   botInstance.stop();
 });
 
-test('startTyping rebinds to a new chat id instead of staying silent', async () => {
-  const chatActions = [];
+test('the turn monitor rebinds to the chat that answered the question', async () => {
+  const sentMessages = [];
   const mockBot = makeBotMock();
-  mockBot.telegram.sendChatAction = async (chatId, action) => { chatActions.push({ chatId, action }); };
+  mockBot.telegram.sendMessage = async (chatId, text) => { sentMessages.push({ chatId, text }); };
 
-  const mockTmux = makeTmuxMock();
+  let alive = true;
+  const mockTmux = makeTmuxMock({ hasSession: async () => alive });
 
   class MockReader {
     start(projectPath, onEvent) { this.onEvent = onEvent; }
@@ -1134,7 +1204,10 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   }
   let mockReader = null;
 
-  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+  const botInstance = createBot(defaultTestConfig({
+    allowedUserIds: ['111'],
+    typingIntervalMs: 10
+  }), {
     bot: mockBot,
     tmux: mockTmux,
     sessionReaderClass: function() {
@@ -1144,12 +1217,13 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
   });
   await botInstance.switchActiveSession('claude-test', 111, '/tmp/proj');
 
-  // Typing already active for chat 111 (text injection starts it)
+  // The text injection opens a turn for chat 111.
   await mockBot.handlers.on.text({ chat: { id: 111 }, message: { text: 'hello' }, reply: async () => {} });
-  assert.equal(botInstance.getActiveState().typingActive, true);
+  assert.equal(botInstance.getActiveState().monitorActive, true);
 
-  // Arm a single-choice question card, then answer from a different chat:
-  // the auto-submit must rebind the indicator to that chat.
+  // Arm a single-choice question card, then answer from a different chat.
+  // The monitor must follow the chat that answered, so a later death notice
+  // must land there, not in the old chat.
   mockReader.onEvent({
     type: 'question',
     content: { question: 'Pick one:', options: [{ label: 'A' }, { label: 'B' }] }
@@ -1161,8 +1235,22 @@ test('startTyping rebinds to a new chat id instead of staying silent', async () 
     answerCbQuery: async () => {},
     reply: async () => {}
   });
-  assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays active for the new chat');
-  assert.equal(chatActions[chatActions.length - 1].chatId, 222, 'typing indicator rebinds to the new chat id');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'monitor stays active for the new chat');
+
+  // The session dies after the answer. The notice must reach the chat that
+  // answered, not the old chat.
+  alive = false;
+
+  const sawNotice = await waitFor(
+    () => sentMessages.some(m => m.text.includes('🔴 Session ended')),
+    { timeoutMs: 1000 }
+  );
+  assert.ok(sawNotice, `expected a session-ended notice, got: ${JSON.stringify(sentMessages)}`);
+  assert.equal(
+    sentMessages.find(m => m.text.includes('🔴 Session ended')).chatId,
+    222,
+    'the notice lands in the chat that answered'
+  );
 
   botInstance.stop();
 });
@@ -1194,11 +1282,13 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
 
   const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-  // Typing runs while the session is alive
+  // The turn monitor runs while the session is alive. No output arrived, so
+  // the typing indicator stays off.
   await readerOnEvent({ type: 'user', content: 'hi' });
   await flush();
   await flush();
-  assert.equal(botInstance.getActiveState().typingActive, true);
+  assert.equal(botInstance.getActiveState().monitorActive, true);
+  assert.equal(botInstance.getActiveState().typingActive, false);
 
   // The session dies; the next 4-second tick must notice
   alive = false;
@@ -1206,7 +1296,7 @@ test('typing tick detects a dead session, stops typing, and notifies once', asyn
   await flush();
   await flush();
 
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stops on session death');
+  assert.equal(botInstance.getActiveState().monitorActive, false, 'the monitor stops on session death');
   assert.equal(botInstance.getActiveState().activeSessionName, null, 'connection cleared');
   const notices = sentMessages.filter(m => m.text.includes('🔴 Session ended'));
   assert.equal(notices.length, 1, `exactly one death notice, got: ${JSON.stringify(sentMessages)}`);
@@ -1294,7 +1384,7 @@ test('enriched /status prints uptime, model, and running sub-agents from the tra
   botInstance.stop();
 });
 
-test('/interrupt sends exactly one Escape and stops typing', async () => {
+test('/interrupt sends exactly one Escape and stops the turn monitor', async () => {
   const escapeCalls = [];
   const mockBot = makeBotMock();
 
@@ -1317,9 +1407,9 @@ test('/interrupt sends exactly one Escape and stops typing', async () => {
   });
   await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
 
-  // Inject text first so the typing indicator is active before the interrupt
+  // Inject text first so the turn monitor is active before the interrupt
   await mockBot.handlers.on.text({ chat: { id: 12345 }, message: { text: 'hello' }, reply: async () => {} });
-  assert.equal(botInstance.getActiveState().typingActive, true, 'typing active before interrupt');
+  assert.equal(botInstance.getActiveState().monitorActive, true, 'monitor active before interrupt');
 
   const interruptHandler = mockBot.handlers.commands.interrupt;
   assert.ok(interruptHandler, 'interrupt command handler registered');
@@ -1332,7 +1422,7 @@ test('/interrupt sends exactly one Escape and stops typing', async () => {
   assert.deepEqual(escapeCalls[0].keys, ['Escape']);
   assert.equal(escapeCalls[0].delayMs, 0);
   assert.match(replies.join('\n'), /Interrupt/, 'confirmation reply sent');
-  assert.equal(botInstance.getActiveState().typingActive, false, 'typing stopped');
+  assert.equal(botInstance.getActiveState().monitorActive, false, 'monitor stopped');
 
   botInstance.stop();
 });
