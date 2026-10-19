@@ -94,6 +94,71 @@ const SYSTEM_INJECTED_USER_RECORD =
 // megabytes, so the head is never read.
 const OPEN_QUESTION_TAIL_BYTES = 1048576;
 
+// A background task resumes the turn by itself. Claude Code writes a
+// task-notification record when the task completes and Claude continues with
+// no user input. A turn that ends while such work runs is a PAUSE, not a stop
+// that waits for the user.
+const BACKGROUND_TASK_LAUNCH = /Async agent launched successfully|Command running in background/;
+const TASK_NOTIFICATION_TOOL_ID = /<tool-use-id>([^<]+)<\/tool-use-id>/;
+
+// An agent transcript can be large; its completion marker is its last
+// assistant stop_reason, so only the tail is needed.
+const AGENT_TRANSCRIPT_TAIL_BYTES = 65536;
+
+// True when one sub-agent transcript is still working: no assistant record
+// yet (the agent just started) or a non-terminal stop_reason. There is no time
+// limit, exactly like the /status card.
+async function agentIsRunning(filePath) {
+  let handle = null;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const { size } = await handle.stat();
+    const length = Math.min(size, AGENT_TRANSCRIPT_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].trim()) continue;
+      let record;
+      try {
+        record = JSON.parse(lines[i]);
+      } catch {
+        continue; // a tail that starts mid-line is not a record
+      }
+      if (record.type === 'assistant' && record.message) {
+        return !TURN_END_REASONS.has(record.message.stop_reason ?? null);
+      }
+    }
+    return true; // no assistant record yet: the agent still works
+  } catch {
+    return true; // unreadable: do not turn a live agent into a stop
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+// True when any side-chain transcript of this session still works. The
+// sub-agents of a session sit in <session>/subagents/ next to its transcript.
+export async function hasRunningSubAgent(sessionFile) {
+  if (typeof sessionFile !== 'string' || sessionFile === '') return false;
+  const agentsDir = path.join(
+    path.dirname(sessionFile),
+    path.basename(sessionFile, '.jsonl'),
+    'subagents'
+  );
+  let names;
+  try {
+    names = await fs.readdir(agentsDir);
+  } catch {
+    return false; // no sub-agents for this session
+  }
+  for (const name of names) {
+    if (!/^agent-.*\.jsonl$/.test(name)) continue;
+    if (await agentIsRunning(path.join(agentsDir, name))) return true;
+  }
+  return false;
+}
+
 /**
  * The question Claude is waiting on, or null. A question is open until an
  * answer names its tool_use id, and until no later user turn has taken over:
@@ -163,8 +228,92 @@ export class ClaudeSessionReader {
     this.lastFileOffsets = new Map(); // filePath -> byte offset
     this._reading = false; // a poll tick is in flight; hold the next one back
     this._lastQuestionId = null; // newest question reported, streamed or scanned
+    this._pendingBackgroundTasks = new Set(); // tool_use ids that still run
     this.pollingTimer = null;
     this._stopped = false;
+  }
+
+  // Add the background tasks that a record launches, and drop the ones it
+  // reports as finished. A launched task resumes the turn by itself, so a
+  // terminal stop with a task in this set is a pause, not a stop.
+  _noteBackgroundRecord(entry) {
+    if (!entry || typeof entry !== 'object') return;
+
+    // A killed harness clears every background task at once.
+    if (entry.type === 'system' && entry.subtype === 'agents_killed') {
+      this._pendingBackgroundTasks.clear();
+      return;
+    }
+
+    // A task-notification is a user record (or a queued operation) with XML
+    // text. Its <tool-use-id> names the task that just finished.
+    const text = typeof entry.content === 'string'
+      ? entry.content
+      : typeof entry.message?.content === 'string'
+        ? entry.message.content
+        : '';
+    if (text) {
+      for (const match of text.matchAll(new RegExp(TASK_NOTIFICATION_TOOL_ID.source, 'g'))) {
+        this._pendingBackgroundTasks.delete(match[1]);
+      }
+    }
+
+    const content = entry.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      if (block.type === 'tool_use' && block.name === 'Bash' &&
+          block.input && block.input.run_in_background === true &&
+          typeof block.id === 'string') {
+        this._pendingBackgroundTasks.add(block.id);
+      } else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        const resultText = typeof block.content === 'string'
+          ? block.content
+          : Array.isArray(block.content)
+            ? block.content.filter(b => b && b.type === 'text').map(b => b.text).join('\n')
+            : '';
+        if (BACKGROUND_TASK_LAUNCH.test(resultText)) {
+          this._pendingBackgroundTasks.add(block.tool_use_id);
+        }
+      }
+    }
+  }
+
+  // True when the turn pauses for work that will resume it by itself: a
+  // launched background task that has not notified yet, or a running
+  // side-chain sub-agent. Claude Code then continues with no user input.
+  async hasPendingWork() {
+    if (this._pendingBackgroundTasks.size > 0) return true;
+    return hasRunningSubAgent(this.sessionFile);
+  }
+
+  // A joined tab starts at the current file size, so it never sees the launch
+  // records of a task that is already running. Read the tail once to seed the
+  // set. The window is the same one used for an open question.
+  async seedPendingBackgroundTasks(filePath) {
+    if (typeof filePath !== 'string' || filePath === '') return;
+    let handle = null;
+    try {
+      handle = await fs.open(filePath, 'r');
+      const { size } = await handle.stat();
+      const length = Math.min(size, OPEN_QUESTION_TAIL_BYTES);
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, size - length);
+      for (const line of buffer.toString('utf8').split('\n')) {
+        if (!line.trim()) continue;
+        let entry;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        this._noteBackgroundRecord(entry);
+      }
+    } catch {
+      // unreadable tail: no seed, the live records still feed the set
+    } finally {
+      if (handle) await handle.close().catch(() => {});
+    }
   }
 
   async resolveProjectDir(projectPath) {
@@ -206,6 +355,7 @@ export class ClaudeSessionReader {
     if (!latestFile) {
       return [];
     }
+    this.sessionFile = latestFile;
 
     try {
       const stat = await fs.stat(latestFile);
@@ -233,9 +383,23 @@ export class ClaudeSessionReader {
 
       const events = [];
 
+      // The turn end is decided AFTER the chunk is parsed: a terminal
+      // stop_reason is only a real stop when no background work will resume
+      // the turn. The newest terminal record wins; its index, compared with the
+      // turn_duration marker, tells which came last.
+      let terminalStop = null;
+      let pendingAgentsAt = -1;
+      let lineIndex = -1;
+
       for (const line of lines) {
+        lineIndex++;
         try {
           const entry = JSON.parse(line);
+          this._noteBackgroundRecord(entry);
+          if (entry.type === 'system' && entry.subtype === 'turn_duration' &&
+              Number(entry.pendingBackgroundAgentCount) > 0) {
+            pendingAgentsAt = lineIndex;
+          }
           if (entry.type === 'user' && entry.message && entry.message.content) {
             const raw = typeof entry.message.content === 'string'
               ? entry.message.content
@@ -269,7 +433,7 @@ export class ClaudeSessionReader {
             // the text above it and this event arrive in the right order.
             const stopReason = entry.message.stop_reason;
             if (TURN_END_REASONS.has(stopReason)) {
-              events.push({ type: 'turn_end', subtype: stopReason });
+              terminalStop = { subtype: stopReason, at: lineIndex };
             }
           } else if (entry.type === 'tool_use' && ASK_TOOL_NAMES.has(entry.name)) {
             this._lastQuestionId = entry.id ?? this._lastQuestionId;
@@ -280,6 +444,16 @@ export class ClaudeSessionReader {
           }
         } catch {
           // Ignore malformed JSON lines
+        }
+      }
+
+      // A turn that pauses for background work sends NO turn_end: Claude
+      // resumes by itself and the stop notice must stay silent. The typing
+      // indicator stays on until the real turn end arrives.
+      if (terminalStop) {
+        const agentsPending = pendingAgentsAt > terminalStop.at;
+        if (!agentsPending && !(await this.hasPendingWork())) {
+          events.push({ type: 'turn_end', subtype: terminalStop.subtype });
         }
       }
 
@@ -308,6 +482,7 @@ export class ClaudeSessionReader {
     // means "not written yet"), getSessionFile re-pins on a later tick.
     this._pinned = options.sessionFile !== undefined || getSessionFile !== null;
     this.sessionFile = this._pinned ? (options.sessionFile ?? null) : null;
+    this._pendingBackgroundTasks.clear(); // a new start sees a new turn stream
 
     // Initialize offset to current size so we only read future events if file already exists
     this.resolveSessionFile(projectPath).then(async file => {
@@ -319,6 +494,9 @@ export class ClaudeSessionReader {
           const stat = await fs.stat(file);
           this.lastFileOffsets.set(file, stat.size);
         } catch {}
+        // The join skips the records above the offset; seed the pending set
+        // from the tail so an already-running task still holds the turn.
+        await this.seedPendingBackgroundTasks(file);
       }
 
       this.pollingTimer = setInterval(async () => {
@@ -352,6 +530,9 @@ export class ClaudeSessionReader {
                   } catch {
                     this.lastFileOffsets.set(newFile, 0); // file appears later, read from start
                   }
+                  // A new transcript has its own tasks: drop the old set.
+                  this._pendingBackgroundTasks.clear();
+                  await this.seedPendingBackgroundTasks(newFile);
                 }
               }
             }
@@ -374,6 +555,9 @@ export class ClaudeSessionReader {
                 } catch {
                   this.lastFileOffsets.delete(pinnedFile); // missing: read it in full when it appears
                 }
+                // A re-pin to another tab's transcript starts with its tasks.
+                this._pendingBackgroundTasks.clear();
+                await this.seedPendingBackgroundTasks(pinnedFile);
               }
             }
           }

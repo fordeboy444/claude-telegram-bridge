@@ -617,6 +617,75 @@ test('text events stream silently; turn_end sends one notifying stop notice', as
   botInstance.stop();
 });
 
+test('a turn that pauses for a running sub-agent sends no stop notice', async () => {
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock();
+
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text, extra) => {
+    sentMessages.push({ chatId, text, extra });
+  };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+    // A background agent still works: Claude resumes by itself.
+    async hasPendingWork() { return true; }
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  await readerOnEvent({ type: 'user', content: 'do it' });
+  await readerOnEvent({ type: 'text', content: 'I started three surveys.' });
+  const before = sentMessages.length;
+
+  await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
+
+  assert.equal(sentMessages.length, before, 'no false stop notice');
+  assert.equal(botInstance.getActiveState().typingActive, true, 'typing stays on while work runs');
+
+  botInstance.stop();
+});
+
+test('a real stop still notifies when no background work is pending', async () => {
+  const mockBot = makeBotMock();
+  const mockTmux = makeTmuxMock();
+
+  const sentMessages = [];
+  mockBot.telegram.sendMessage = async (chatId, text, extra) => {
+    sentMessages.push({ chatId, text, extra });
+  };
+
+  let readerOnEvent = null;
+  class MockReader {
+    start(projectPath, onEvent) { readerOnEvent = onEvent; }
+    stop() {}
+    async hasPendingWork() { return false; }
+  }
+
+  const botInstance = createBot(defaultTestConfig({ allowedUserIds: ['111'] }), {
+    bot: mockBot,
+    tmux: mockTmux,
+    sessionReaderClass: MockReader
+  });
+
+  await botInstance.switchActiveSession('claude-test', 12345, '/tmp/proj');
+
+  await readerOnEvent({ type: 'user', content: 'do it' });
+  await readerOnEvent({ type: 'turn_end', subtype: 'end_turn' });
+
+  assert.equal(sentMessages[sentMessages.length - 1].text, '✅ *Claude Code stopped.*');
+
+  botInstance.stop();
+});
+
 test('plain text is injected with the Telegram user prefix and stays quiet', async () => {
   const mockBot = makeBotMock();
 

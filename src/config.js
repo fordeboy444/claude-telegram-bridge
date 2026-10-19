@@ -29,6 +29,9 @@ export function loadConfig(env = process.env) {
     projectsDir: env.PROJECTS_DIR || process.cwd(),
     claudeHome: env.CLAUDE_HOME || path.join(os.homedir(), '.claude'),
     tmuxPath: env.TMUX_PATH || 'tmux',
-    pollIntervalMs: Number(env.POLL_INTERVAL_MS) || 1000
+    pollIntervalMs: Number(env.POLL_INTERVAL_MS) || 1000,
+    // How often the typing loop samples the transport status. The same loop
+    // decides when a status has settled enough to notify.
+    typingIntervalMs: Number(env.TYPING_INTERVAL_MS) || 4000
   };
 }

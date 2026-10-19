@@ -890,3 +890,103 @@ test('ClaudeSessionReader ends the turn on an interrupt marker', async () => {
   assert.deepEqual(events.map((e) => e.type), ['text', 'user', 'turn_end']);
   assert.equal(events[2].subtype, 'interrupted');
 });
+
+// A background agent keeps working after the parent turn ends. Claude resumes
+// by itself when the task-notification arrives, so the turn is a pause, not a
+// stop that waits for the user. `turn_duration` names the pending count.
+test('ClaudeSessionReader does not end the turn while background agents are pending', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-pending-agent-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-pending.jsonl');
+
+  await fs.writeFile(sessionFile, [
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'I started two surveys.' }], stop_reason: 'end_turn' }
+    }),
+    // This record follows the turn end and says two agents still work.
+    JSON.stringify({ type: 'system', subtype: 'turn_duration', pendingBackgroundAgentCount: 2 })
+  ].join('\n') + '\n');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const events = await reader.readNewEvents(projectPath);
+
+  assert.deepEqual(events.map((e) => e.type), ['text'], 'a paused turn sends no stop signal');
+});
+
+test('ClaudeSessionReader does not end the turn while a sub-agent transcript is running', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-pending-sub-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  const agentsDir = path.join(projectsDir, 'session-sub', 'subagents');
+  await fs.mkdir(agentsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-sub.jsonl');
+
+  await fs.writeFile(sessionFile, [
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Survey started.' }], stop_reason: 'end_turn' }
+    })
+  ].join('\n') + '\n');
+  // The side-chain has no terminal stop_reason: the agent still works.
+  await fs.writeFile(
+    path.join(agentsDir, 'agent-a1.jsonl'),
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Read', input: {} }], stop_reason: 'tool_use' }
+    }) + '\n'
+  );
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const events = await reader.readNewEvents(projectPath);
+
+  assert.deepEqual(events.map((e) => e.type), ['text'], 'a running sub-agent holds the turn open');
+});
+
+test('ClaudeSessionReader holds the turn for a background command until its notification', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-pending-bash-'));
+  const projectPath = path.resolve(tmpDir, 'test-project');
+  const projectsDir = path.join(tmpDir, '.claude', 'projects', getProjectSlug(projectPath));
+  await fs.mkdir(projectsDir, { recursive: true });
+  const sessionFile = path.join(projectsDir, 'session-bash.jsonl');
+
+  await fs.writeFile(sessionFile, [
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', id: 'call_bg1', name: 'Bash', input: { command: 'sleep 60', run_in_background: true } }],
+        stop_reason: 'tool_use'
+      }
+    }),
+    JSON.stringify({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'call_bg1', content: 'Command running in background with ID: bx1.' }]
+      }
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'The command runs in the background.' }], stop_reason: 'end_turn' }
+    })
+  ].join('\n') + '\n');
+
+  const reader = new ClaudeSessionReader({ claudeHome: path.join(tmpDir, '.claude') });
+  const first = await reader.readNewEvents(projectPath);
+  assert.deepEqual(first.map((e) => e.type), ['text'], 'a pending background command sends no stop signal');
+
+  // The background command finishes and Claude resumes without user input.
+  await fs.appendFile(sessionFile, JSON.stringify({
+    type: 'queue-operation',
+    operation: 'enqueue',
+    content: '<task-notification>\n<task-id>bx1</task-id>\n<tool-use-id>call_bg1</tool-use-id>\n<status>completed</status>\n</task-notification>'
+  }) + '\n');
+  await fs.appendFile(sessionFile, JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'The command finished.' }], stop_reason: 'end_turn' }
+  }) + '\n');
+
+  const second = await reader.readNewEvents(projectPath);
+  assert.deepEqual(second.map((e) => e.type), ['text', 'turn_end'], 'the resumed turn ends normally');
+});

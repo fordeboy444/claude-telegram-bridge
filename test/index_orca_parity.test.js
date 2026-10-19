@@ -24,6 +24,11 @@ const HANDLE = 'term_a';
 const TITLE = '✳ Casual greeting';
 const IDLE = { isRunningAgent: true, status: 'idle' };
 const WORKING = { isRunningAgent: true, status: 'working' };
+// Orca holds this status while Claude waits on the user: a question modal or
+// a tool approval. The bridge must alert on it.
+const PERMISSION = { isRunningAgent: true, status: 'permission' };
+// Orca cannot name a status right now. That is not proof of a stop.
+const UNKNOWN = { isRunningAgent: true, status: null };
 const QUESTION = {
   question: 'Pick one:',
   options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }]
@@ -63,7 +68,12 @@ function makeOrcaMock({ statuses = {}, sendResult, tails = {} } = {}) {
     },
     async agentStatus(handle) {
       statusCalls.push(handle);
-      return statuses[handle] ?? IDLE;
+      const answer = statuses[handle];
+      // A list steps through once per probe, so a test can hold a status, or
+      // change it after a given number of samples.
+      if (Array.isArray(answer)) return answer[Math.min(statusCalls.length - 1, answer.length - 1)];
+      if (typeof answer === 'function') return answer(statusCalls.length);
+      return answer ?? IDLE;
     },
     async readTail(handle) {
       readCalls.push(handle);
@@ -76,7 +86,7 @@ function makeOrcaMock({ statuses = {}, sendResult, tails = {} } = {}) {
   };
 }
 
-async function makeHarness({ statuses = {}, sendResult, tails = {} } = {}) {
+async function makeHarness({ statuses = {}, sendResult, tails = {}, typingIntervalMs } = {}) {
   // defaultTestConfig() pins claudeHome to the real ~/.claude. A temp dir keeps
   // the /status gather and the skills scan off the developer's own machine.
   const claudeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'orca-parity-'));
@@ -127,7 +137,11 @@ async function makeHarness({ statuses = {}, sendResult, tails = {} } = {}) {
       super(readers);
     }
   }
-  const api = createBot(defaultTestConfig({ claudeHome, allowedUserIds: [CHAT_ID] }), {
+  const api = createBot(defaultTestConfig({
+    claudeHome,
+    allowedUserIds: [CHAT_ID],
+    ...(typingIntervalMs === undefined ? {} : { typingIntervalMs })
+  }), {
     bot,
     tmux,
     orcaClient: orca,
@@ -430,6 +444,94 @@ test('a refused skill injection tells the user the tab did not accept the input'
 
   assert.doesNotMatch(h.replies.at(-1), /Injected/);
   assert.match(h.replies.at(-1), /did not accept|Nothing was sent/i);
+
+  h.api.stop();
+});
+
+// The messages Telegram alerts on: a stop notice, a needs-input notice or a
+// question card. Everything else is sent with disable_notification.
+function alerts(h) {
+  return h.sent
+    .filter((args) => args[2]?.disable_notification !== true)
+    .map((args) => String(args[1] ?? ''));
+}
+
+function startTurn(h) {
+  h.onEvent({ type: 'user', content: 'continue please' });
+  h.onEvent({ type: 'turn_end', subtype: 'end_turn' });
+}
+
+test('a held permission status on an Orca tab sends one needs-input alert', async () => {
+  const h = await joinOrcaTab({ statuses: { [HANDLE]: PERMISSION }, typingIntervalMs: 5 });
+
+  startTurn(h);
+  await waitFor(() => alerts(h).some((text) => /needs your input/i.test(text)));
+  // The status keeps saying permission: the alert must not repeat.
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(
+    alerts(h).filter((text) => /needs your input/i.test(text)).length,
+    1,
+    `one alert only, got: ${JSON.stringify(alerts(h))}`
+  );
+
+  h.api.stop();
+});
+
+test('a single permission sample that returns to working sends no alert', async () => {
+  // One permission reading, then the agent resumes. A settle window keeps a
+  // slow hook from turning a blip into an alert.
+  const h = await joinOrcaTab({
+    statuses: { [HANDLE]: (n) => (n === 1 ? PERMISSION : WORKING) },
+    typingIntervalMs: 5
+  });
+
+  startTurn(h);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.deepEqual(alerts(h), []);
+
+  h.api.stop();
+});
+
+test('an unknown Orca status never alerts', async () => {
+  const h = await joinOrcaTab({ statuses: { [HANDLE]: UNKNOWN }, typingIntervalMs: 5 });
+
+  startTurn(h);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.deepEqual(alerts(h), []);
+  assert.doesNotMatch(h.outbox.join('\n'), /Session ended/);
+
+  h.api.stop();
+});
+
+test('an idle turn end sends its stop notice only after the status holds', async () => {
+  const h = await joinOrcaTab({ statuses: { [HANDLE]: IDLE }, typingIntervalMs: 20 });
+
+  startTurn(h);
+  // Two idle samples: less than the three a settled stop needs.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(alerts(h), []);
+
+  await waitFor(() => alerts(h).some((text) => /Claude Code stopped/.test(text)));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(
+    alerts(h).filter((text) => /Claude Code stopped/.test(text)).length,
+    1,
+    `one stop notice only, got: ${JSON.stringify(alerts(h))}`
+  );
+
+  h.api.stop();
+});
+
+test('an interrupted Orca turn sends no alert', async () => {
+  const h = await joinOrcaTab({ statuses: { [HANDLE]: IDLE }, typingIntervalMs: 5 });
+
+  h.onEvent({ type: 'turn_end', subtype: 'interrupted' });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.deepEqual(alerts(h), []);
 
   h.api.stop();
 });

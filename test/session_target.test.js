@@ -297,11 +297,22 @@ test('isAlive is false for an Orca target whose terminal is disconnected', async
   assert.equal(await io.isAlive(anOrcaTarget()), false);
 });
 
-test('isAlive answers false when the Orca transport fails', async () => {
-  // isAlive is polled on every tick. A dead socket must answer "not alive",
-  // never throw: a throw here would break the tick that detects a dead session.
+test('isAlive answers null when the Orca transport fails', async () => {
+  // A busy or restarting socket is not a dead tab. Only a complete list that
+  // does not hold the tab proves the tab is gone.
   const orca = {
     list: async () => { throw new Error('Orca is not running'); },
+    agentStatus: async () => ({ isRunningAgent: false, status: null }),
+    send: async () => ({ handle: 'term_a', accepted: true, bytesWritten: 0 })
+  };
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), null);
+});
+
+test('isAlive answers false when the tab is absent from a good list', async () => {
+  const orca = {
+    list: async () => [{ handle: 'term_other', connected: true }],
     agentStatus: async () => ({ isRunningAgent: false, status: null }),
     send: async () => ({ handle: 'term_a', accepted: true, bytesWritten: 0 })
   };

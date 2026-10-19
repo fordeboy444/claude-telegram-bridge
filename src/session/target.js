@@ -124,15 +124,24 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
   // Only a live, connected tab is alive. `listAgentTabs` skips `connected !==
   // true` already, so this layer must not call a dropped tab alive.
   async function isAlive(target) {
-    // isAlive is polled on every tick. A transport failure answers "not alive"
-    // instead of throwing, exactly like the tmux `hasSession` probe does.
+    if (target.kind === 'tmux') {
+      try {
+        return Boolean(await tmux.hasSession(target.sessionName));
+      } catch {
+        return null;
+      }
+    }
+    // An Orca transport failure is not proof of death: the socket can be busy
+    // or mid-restart while the tab still runs. Only a complete list that does
+    // not hold the tab answers "gone"; everything else is unknown (null).
     try {
-      if (target.kind === 'tmux') return Boolean(await tmux.hasSession(target.sessionName));
       const terminals = await orca.list();
+      if (!Array.isArray(terminals)) return null;
       const found = terminals.find((t) => t && t.handle === target.handle);
-      return Boolean(found && found.connected !== false);
+      if (!found) return false;
+      return found.connected !== false;
     } catch {
-      return false;
+      return null;
     }
   }
 
