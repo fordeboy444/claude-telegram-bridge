@@ -307,6 +307,41 @@ test('formatStatusMessage shows a no-transcript-yet hint for a live session with
 
 // Adjacent neighbor: a live session WITH a transcript must not show the hint
 // (only the cold-start state explains the missing lines).
+test('formatStatusMessage shows the project name, not only the tab title', () => {
+  const message = formatStatusMessage({
+    projectName: 'hermes agent on hetzner',
+    tabName: 'Project completion',
+    sessionName: 'Project completion',
+    alive: true,
+    status: { transcriptFound: true, sessionStart: null, model: 'beam:cloud', lastActivityMs: null, running: [], finishedCount: 6, totalCount: 6 }
+  });
+  assert.match(message, /🎯 Project: `hermes agent on hetzner` 🟡 Stopped/);
+  assert.match(message, /🪟 Tab: `Project completion`/);
+  assert.doesNotMatch(message, /🎯 `Project completion`/, 'the tab title never replaces the project line');
+});
+
+test('formatStatusMessage hides the tab line when it equals the project name', () => {
+  const message = formatStatusMessage({
+    projectName: 'hermes agent on hetzner',
+    tabName: 'hermes agent on hetzner',
+    sessionName: 'claude-x',
+    alive: true,
+    status: { transcriptFound: true, sessionStart: null, model: null, lastActivityMs: null, running: [], finishedCount: 0, totalCount: 0 }
+  });
+  assert.match(message, /🎯 Project: `hermes agent on hetzner` 🟡 Stopped/);
+  assert.doesNotMatch(message, /🪟 Tab:/);
+});
+
+test('formatStatusMessage falls back to the session name when no project is known', () => {
+  const message = formatStatusMessage({
+    sessionName: 'claude-x',
+    alive: true,
+    status: { transcriptFound: true, sessionStart: null, model: null, lastActivityMs: null, running: [], finishedCount: 0, totalCount: 0 }
+  });
+  assert.match(message, /🎯 `x` 🟡 Stopped/);
+  assert.doesNotMatch(message, /Project:/);
+});
+
 test('formatStatusMessage omits the no-transcript-yet hint when the transcript is found', () => {
   const now = 1_700_000_000_000;
   const message = formatStatusMessage({

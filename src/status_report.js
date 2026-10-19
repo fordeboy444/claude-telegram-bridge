@@ -450,40 +450,40 @@ function formatAgentLine(agent, index, now) {
   return `${index}. ${typePart}${label}\n   ${parts.join(' · ')}`;
 }
 
-export function formatStatusMessage({ sessionName, alive, status, now = Date.now() }) {
-  return fitMessage({ sessionName, alive, status, now });
+export function formatStatusMessage({ projectName, tabName, sessionName, alive, status, now = Date.now() }) {
+  return fitMessage({ projectName, tabName, sessionName, alive, status, now });
 }
 
 // Keep under MAX_MESSAGE_CHARS: shorten labels first, then list fewer agents.
 // The list is sorted oldest first, so shrinking the listing drops the
 // shortest-running agents (they move into the "…and N more" count).
-function fitMessage({ sessionName, alive, status, now }) {
+function fitMessage({ projectName, tabName, sessionName, alive, status, now }) {
   if (!status || !status.running) {
-    return renderStatusLines({ sessionName, alive, status, now, labelMax: DESC_MAX, maxListed: MAX_LISTED_AGENTS });
+    return renderStatusLines({ projectName, tabName, sessionName, alive, status, now, labelMax: DESC_MAX, maxListed: MAX_LISTED_AGENTS });
   }
 
   let labelMax = DESC_MAX;
   let maxListed = Math.min(MAX_LISTED_AGENTS, status.running.length);
-  let message = renderStatusLines({ sessionName, alive, status, now, labelMax, maxListed });
+  let message = renderStatusLines({ projectName, tabName, sessionName, alive, status, now, labelMax, maxListed });
 
   if (message.length > MAX_MESSAGE_CHARS) {
     labelMax = Math.floor(DESC_MAX / 2);
-    message = renderStatusLines({ sessionName, alive, status, now, labelMax, maxListed });
+    message = renderStatusLines({ projectName, tabName, sessionName, alive, status, now, labelMax, maxListed });
   }
 
   // Drop the newest half of the list each pass until it fits; the header
   // must stay even when nothing is listed anymore.
   while (message.length > MAX_MESSAGE_CHARS && maxListed > 1) {
     maxListed = Math.max(1, Math.floor(maxListed / 2));
-    message = renderStatusLines({ sessionName, alive, status, now, labelMax, maxListed });
+    message = renderStatusLines({ projectName, tabName, sessionName, alive, status, now, labelMax, maxListed });
   }
   if (message.length > MAX_MESSAGE_CHARS && maxListed === 1) {
-    message = renderStatusLines({ sessionName, alive, status, now, labelMax, maxListed: 0 });
+    message = renderStatusLines({ projectName, tabName, sessionName, alive, status, now, labelMax, maxListed: 0 });
   }
   return message;
 }
 
-function renderStatusLines({ sessionName, alive, status, now, labelMax, maxListed }) {
+function renderStatusLines({ projectName, tabName, sessionName, alive, status, now, labelMax, maxListed }) {
   const lines = ['📊 *Session Status*'];
 
   // A dead session is terminated. A live one is running during a turn and
@@ -495,7 +495,17 @@ function renderStatusLines({ sessionName, alive, status, now, labelMax, maxListe
   // Display name only: sessions are named claude-<folder>; show the folder part.
   const displayName = sessionName ? sessionName.replace(/^claude-/, '') : '';
   const name = sanitizeLabel(displayName || 'unknown');
-  lines.push(`🎯 \`${name}\` ${stateMark}`);
+  // The project is what the user thinks in. The session name stays the
+  // fallback when the caller cannot name a project (a bare tmux session).
+  const project = sanitizeLabel(projectName || '');
+  if (project) {
+    lines.push(`🎯 Project: \`${project}\` ${stateMark}`);
+    if (tabName && sanitizeLabel(tabName) !== project) {
+      lines.push(`🪟 Tab: \`${sanitizeLabel(tabName)}\``);
+    }
+  } else {
+    lines.push(`🎯 \`${name}\` ${stateMark}`);
+  }
 
   // A live session with no transcript on disk is a cold start, not a lookup
   // failure: Claude writes the transcript on the first exchange. Say so

@@ -127,6 +127,47 @@ export function createBot(config, deps = {}) {
     }
   }
 
+  // The project name for an Orca tab. The repo id is the stable link; the
+  // remembered map covers the normal card tap, and the path is the last
+  // resort. A name is what the status card shows, so a tab never falls back
+  // to its title alone when a project match exists.
+  async function projectNameForTab(tab) {
+    const remembered = tabProjectNames.get(tab.handle);
+    if (remembered) return remembered;
+    try {
+      const projects = await projectManager.listProjects();
+      const byRepo = tab.repoId
+        ? projects.find(p => Array.isArray(p.repoIds) && p.repoIds.includes(tab.repoId))
+        : null;
+      if (byRepo) return byRepo.displayName || byRepo.name;
+      const byPath = projects.find(p => p.path && p.path === tab.projectPath);
+      if (byPath) return byPath.displayName || byPath.name;
+    } catch (err) {
+      console.warn('⚠️ Project lookup failed:', err.message);
+    }
+    return tab.projectPath ? path.basename(tab.projectPath) : null;
+  }
+
+  // The project behind the active target, for /status. A tmux session keeps
+  // the normalized name; the project list turns it back into a display name.
+  async function activeProjectLabel() {
+    if (!activeTarget) return null;
+    if (activeTarget.kind === 'orca' && activeTarget.projectName) {
+      return activeTarget.projectName;
+    }
+    if (activeProjectPath) {
+      try {
+        const projects = await projectManager.listProjects();
+        const match = projects.find(p => p.path && p.path === activeProjectPath);
+        if (match) return match.displayName || match.name;
+      } catch (err) {
+        console.warn('⚠️ Project lookup failed:', err.message);
+      }
+      return path.basename(activeProjectPath);
+    }
+    return projectNameFromSession(targetLabel(activeTarget));
+  }
+
   // A status must hold for this many samples before it earns a message. Orca
   // and the transcript settle at different instants, so one reading is not
   // proof: a blip must never wake the user.
@@ -565,7 +606,15 @@ export function createBot(config, deps = {}) {
         now: Date.now()
       });
       return ctx.reply(
-        formatStatusMessage({ sessionName: targetLabel(activeTarget), alive: exists, status }),
+        formatStatusMessage({
+          projectName: await activeProjectLabel(),
+          // The tab title is the agent name the user sees in Orca. Keep it
+          // beside the project so the two cannot be confused.
+          tabName: activeTarget.kind === 'orca' ? activeTarget.title : null,
+          sessionName: targetLabel(activeTarget),
+          alive: exists,
+          status
+        }),
         { parse_mode: 'Markdown' }
       );
     } catch (err) {
@@ -751,6 +800,7 @@ export function createBot(config, deps = {}) {
     const target = orcaTarget({
       handle: tab.handle,
       title: tab.cleanTitle,
+      projectName: await projectNameForTab(tab),
       projectPath: tab.projectPath,
       transcriptFile: await resolveTranscript(tab, { claudeHome: config.claudeHome })
     });

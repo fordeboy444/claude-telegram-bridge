@@ -26,11 +26,11 @@ export function tmuxTarget(sessionName, projectPath) {
 /**
  * An Orca agent tab target.
  *
- * @param {{handle: string, title: string, projectPath: string|null, transcriptFile: string|null}} tab
- * @returns {{kind: 'orca', handle: string, title: string, projectPath: string|null, transcriptFile: string|null}}
+ * @param {{handle: string, title: string, projectName?: string|null, projectPath: string|null, transcriptFile: string|null}} tab
+ * @returns {{kind: 'orca', handle: string, title: string, projectName: string|null, projectPath: string|null, transcriptFile: string|null}}
  */
-export function orcaTarget({ handle, title, projectPath, transcriptFile }) {
-  return { kind: 'orca', handle, title, projectPath, transcriptFile };
+export function orcaTarget({ handle, title, projectName = null, projectPath, transcriptFile }) {
+  return { kind: 'orca', handle, title, projectName, projectPath, transcriptFile };
 }
 
 // The one-line name of a target, for menus and messages.
