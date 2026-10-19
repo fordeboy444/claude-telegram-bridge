@@ -347,6 +347,39 @@ test('OrcaRuntimeClient.list returns the terminals array', async () => {
   assert.deepEqual(await client.list(), tabs);
 });
 
+test('OrcaRuntimeClient.list throws on a reply with no terminals array', async () => {
+  // An empty array is a claim that the inventory is empty, and the bridge acts
+  // on that claim by ending the session. A reply the bridge cannot read must
+  // never become one.
+  const dir = await tempDir();
+  const p = await writeRuntimeJson(dir, RUNTIME_BODY);
+  const connect = () => makeEchoSocket((req) => ({ id: req.id, ok: true, result: {} }));
+  const client = new OrcaRuntimeClient({ runtimeJsonPath: p, connect });
+
+  await assert.rejects(
+    client.list(),
+    (e) => e instanceof OrcaRpcError && e.code === 'unexpected_result'
+  );
+});
+
+test('OrcaRuntimeClient.listDetailed keeps the listing scope', async () => {
+  const dir = await tempDir();
+  const p = await writeRuntimeJson(dir, RUNTIME_BODY);
+  const tabs = [{ handle: 'term_x', title: 'Main Agent' }];
+  const connect = () => makeEchoSocket((req) => ({
+    id: req.id,
+    ok: true,
+    result: { terminals: tabs, truncated: true, hostScope: { hostIds: ['local'], omittedHostIds: [] } }
+  }));
+  const client = new OrcaRuntimeClient({ runtimeJsonPath: p, connect });
+
+  assert.deepEqual(await client.listDetailed(), {
+    terminals: tabs,
+    truncated: true,
+    hostScope: { hostIds: ['local'], omittedHostIds: [] }
+  });
+});
+
 test('DEFAULT_RUNTIME_JSON_PATH is the orca-home path', () => {
   assert.equal(DEFAULT_RUNTIME_JSON_PATH, '/home/orca/.config/orca/orca-runtime.json');
 });

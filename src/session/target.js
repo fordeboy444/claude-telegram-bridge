@@ -121,8 +121,44 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
     return tmux.getSessionOption(target.sessionName, '@claude_session_id');
   }
 
-  // Only a live, connected tab is alive. `listAgentTabs` skips `connected !==
-  // true` already, so this layer must not call a dropped tab alive.
+  // How long to wait before a second listing confirms an absence. A row can be
+  // missing from one reading, and the tab still runs.
+  const ABSENT_CONFIRM_DELAY_MS = 500;
+
+  // The listing plus its scope. A client that cannot report the scope is read
+  // as a complete local inventory, which is what older Orca versions send.
+  async function readListing() {
+    if (typeof orca.listDetailed === 'function') return orca.listDetailed();
+    const terminals = await orca.list();
+    if (!Array.isArray(terminals)) return null;
+    return { terminals, truncated: false, hostScope: null };
+  }
+
+  // True only when the listing positively covers this bridge's host. An
+  // omitted host makes an absent row unverifiable, not dead.
+  function coversLocalHost(hostScope) {
+    if (!hostScope) return true;
+    const omitted = Array.isArray(hostScope.omittedHostIds) ? hostScope.omittedHostIds : [];
+    if (omitted.includes('local')) return false;
+    const covered = Array.isArray(hostScope.hostIds) ? hostScope.hostIds : null;
+    return covered === null || covered.includes('local');
+  }
+
+  async function probeAlive(target) {
+    const listing = await readListing();
+    if (!listing) return null;
+    const found = listing.terminals.find((t) => t && t.handle === target.handle);
+    // `connected` says that a client is attached, not that the agent lives.
+    // The user can close Orca while Claude keeps working.
+    if (found) return true;
+    // Upstream invariant: an absent row is evidence of exit only inside a
+    // complete, positively covered inventory.
+    if (listing.truncated || !coversLocalHost(listing.hostScope)) return null;
+    return false;
+  }
+
+  // Only an absence that holds on a second probe is death. Everything else is
+  // either alive or unknown (null), and unknown never ends a session.
   async function isAlive(target) {
     if (target.kind === 'tmux') {
       try {
@@ -131,15 +167,11 @@ export function createSessionIo({ tmux, orca, sleep = (ms) => new Promise((r) =>
         return null;
       }
     }
-    // An Orca transport failure is not proof of death: the socket can be busy
-    // or mid-restart while the tab still runs. Only a complete list that does
-    // not hold the tab answers "gone"; everything else is unknown (null).
     try {
-      const terminals = await orca.list();
-      if (!Array.isArray(terminals)) return null;
-      const found = terminals.find((t) => t && t.handle === target.handle);
-      if (!found) return false;
-      return found.connected !== false;
+      const first = await probeAlive(target);
+      if (first !== false) return first;
+      await sleep(ABSENT_CONFIRM_DELAY_MS);
+      return await probeAlive(target);
     } catch {
       return null;
     }

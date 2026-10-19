@@ -189,9 +189,28 @@ export class OrcaRuntimeClient {
     });
   }
 
-  async list() {
+  // The terminal rows plus the facts that say how complete the listing is.
+  // `truncated` and `hostScope` decide whether an absent row proves death:
+  // upstream states that an absent row is evidence only inside a positively
+  // covered inventory. A reply with no array throws, because an invented empty
+  // list is a false claim that every terminal exited.
+  async listDetailed() {
     const result = await this.request('terminal.list', {});
-    return Array.isArray(result?.terminals) ? result.terminals : [];
+    if (!Array.isArray(result?.terminals)) {
+      throw new OrcaRpcError('terminal.list returned no terminals array', {
+        method: 'terminal.list',
+        code: 'unexpected_result'
+      });
+    }
+    return {
+      terminals: result.terminals,
+      truncated: result.truncated === true,
+      hostScope: result.hostScope ?? null
+    };
+  }
+
+  async list() {
+    return (await this.listDetailed()).terminals;
   }
 
   async agentStatus(handle) {

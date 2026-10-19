@@ -49,22 +49,27 @@ class ReaderSpy {
 // The Orca client seam (deps.orcaClient). `calls` records every terminal.send,
 // `statusCalls` every agentStatus probe, `readCalls` every terminal.read: a
 // test can then tell a tab status read from a screen read.
-function makeOrcaMock({ statuses = {}, sendResult, tails = {} } = {}) {
+function makeOrcaMock({ statuses = {}, sendResult, tails = {}, terminals } = {}) {
   const calls = [];
   const statusCalls = [];
   const readCalls = [];
+  const listCalls = [];
+  const present = {
+    handle: HANDLE,
+    connected: true,
+    title: TITLE,
+    worktreeId: `repo-main::${PROJECT_PATH}`,
+    worktreePath: PROJECT_PATH
+  };
   return {
     calls,
     statusCalls,
     readCalls,
+    listCalls,
     async list() {
-      return [{
-        handle: HANDLE,
-        connected: true,
-        title: TITLE,
-        worktreeId: `repo-main::${PROJECT_PATH}`,
-        worktreePath: PROJECT_PATH
-      }];
+      listCalls.push(listCalls.length + 1);
+      if (typeof terminals === 'function') return terminals(listCalls.length, present);
+      return terminals ?? [present];
     },
     async agentStatus(handle) {
       statusCalls.push(handle);
@@ -86,7 +91,7 @@ function makeOrcaMock({ statuses = {}, sendResult, tails = {} } = {}) {
   };
 }
 
-async function makeHarness({ statuses = {}, sendResult, tails = {}, typingIntervalMs } = {}) {
+async function makeHarness({ statuses = {}, sendResult, tails = {}, terminals, typingIntervalMs } = {}) {
   // defaultTestConfig() pins claudeHome to the real ~/.claude. A temp dir keeps
   // the /status gather and the skills scan off the developer's own machine.
   const claudeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'orca-parity-'));
@@ -130,7 +135,7 @@ async function makeHarness({ statuses = {}, sendResult, tails = {}, typingInterv
     }
   };
 
-  const orca = makeOrcaMock({ statuses, sendResult, tails });
+  const orca = makeOrcaMock({ statuses, sendResult, tails, terminals });
   const readers = [];
   class Spy extends ReaderSpy {
     constructor() {
@@ -502,6 +507,40 @@ test('an unknown Orca status never alerts', async () => {
 
   assert.deepEqual(alerts(h), []);
   assert.doesNotMatch(h.outbox.join('\n'), /Session ended/);
+
+  h.api.stop();
+});
+
+test('one missing terminal row does not end the session', async () => {
+  // An inventory can be partial for one reading: a listing is truncated, a host
+  // is omitted, or the socket reattaches. The agent keeps working. The bridge
+  // must confirm the absence before it reports death.
+  const h = await joinOrcaTab({
+    statuses: { [HANDLE]: WORKING },
+    terminals: (n, present) => (n === 1 ? [] : [present]),
+    typingIntervalMs: 5
+  });
+
+  startTurn(h);
+  await waitFor(() => h.orca.listCalls.length >= 2);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.doesNotMatch(h.outbox.join('\n'), /Session ended/);
+
+  h.api.stop();
+});
+
+test('a tab absent from two listings ends the session', async () => {
+  // Death is still reported: the absence must hold on a second probe.
+  const h = await joinOrcaTab({
+    statuses: { [HANDLE]: WORKING },
+    terminals: () => [],
+    typingIntervalMs: 5
+  });
+
+  startTurn(h);
+  await waitFor(() => /Session ended/.test(h.outbox.join('\n')));
+  assert.equal(h.outbox.filter((text) => /Session ended/.test(text)).length, 1);
 
   h.api.stop();
 });

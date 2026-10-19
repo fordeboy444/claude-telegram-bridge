@@ -8,9 +8,19 @@ import { makeTmuxMock } from './helpers.js';
 // Recording Orca client. Every call is pushed to `calls`.
 function makeOrcaMock(overrides = {}) {
   const calls = [];
+  let listCalls = 0;
   return {
     calls,
-    list: async () => (overrides.terminals ?? [{ handle: 'term_a', connected: true }]),
+    get listCalls() { return listCalls; },
+    list: async () => {
+      listCalls += 1;
+      const terminals = overrides.terminals;
+      if (typeof terminals === 'function') return terminals(listCalls);
+      return terminals ?? [{ handle: 'term_a', connected: true }];
+    },
+    // Only present when a test needs the listing scope. `isAlive` must use it
+    // when it exists, because a partial listing proves nothing about death.
+    ...(overrides.listDetailed ? { listDetailed: overrides.listDetailed } : {}),
     agentStatus: async (h) => (overrides.statuses?.[h] ?? { isRunningAgent: true, status: null }),
     readTail: async (h) => (overrides.tails?.[h] ?? ''),
     send: async (h, p) => {
@@ -274,11 +284,24 @@ test('isAlive is true for a tmux target with a session', async () => {
   assert.equal(await io.isAlive(aTmuxTarget()), true);
 });
 
+const noSleep = { sleep: async () => {} };
+
 test('isAlive is false for an Orca target absent from terminal.list', async () => {
   const orca = makeOrcaMock({ terminals: [{ handle: 'term_other', connected: true }] });
-  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca, ...noSleep });
 
   assert.equal(await io.isAlive(anOrcaTarget()), false);
+  assert.equal(orca.listCalls, 2, 'an absence needs a second probe');
+});
+
+test('isAlive stays true when a missing row reappears on the second probe', async () => {
+  // One partial listing must not end a session.
+  const orca = makeOrcaMock({
+    terminals: (n) => (n === 1 ? [] : [{ handle: 'term_a', connected: true }])
+  });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca, ...noSleep });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), true);
 });
 
 test('isAlive is true for an Orca target in terminal.list', async () => {
@@ -288,11 +311,55 @@ test('isAlive is true for an Orca target in terminal.list', async () => {
   assert.equal(await io.isAlive(anOrcaTarget()), true);
 });
 
-test('isAlive is false for an Orca target whose terminal is disconnected', async () => {
-  // A tab that is present but disconnected cannot take input. listAgentTabs
-  // already drops it, so the IO layer must agree.
+test('isAlive is true for an Orca target whose terminal is disconnected', async () => {
+  // `connected` says that a client is attached, not that the agent lives.
+  // The user can close Orca or lose the socket for a moment while Claude keeps
+  // working. A detached tab is not a dead tab: only an absent row can prove
+  // death, and only inside a complete listing.
   const orca = makeOrcaMock({ terminals: [{ handle: 'term_a', connected: false }] });
   const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), true);
+});
+
+test('isAlive answers null when the listing is truncated', async () => {
+  // Upstream invariant: an absent row is proof only inside a positively
+  // covered inventory. A truncated listing can hide a live tab.
+  const orca = makeOrcaMock({
+    listDetailed: async () => ({
+      terminals: [{ handle: 'term_other', connected: true }],
+      truncated: true,
+      hostScope: null
+    })
+  });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), null);
+});
+
+test('isAlive answers null when the tab host was not covered', async () => {
+  // A listing that omits the local host cannot say that a local tab is gone.
+  const orca = makeOrcaMock({
+    listDetailed: async () => ({
+      terminals: [],
+      truncated: false,
+      hostScope: { hostIds: ['ssh:box-1'], omittedHostIds: ['local'] }
+    })
+  });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+
+  assert.equal(await io.isAlive(anOrcaTarget()), null);
+});
+
+test('isAlive answers false when a complete covered listing omits the tab', async () => {
+  const orca = makeOrcaMock({
+    listDetailed: async () => ({
+      terminals: [{ handle: 'term_other', connected: true }],
+      truncated: false,
+      hostScope: { hostIds: ['local'], omittedHostIds: [] }
+    })
+  });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca, ...noSleep });
 
   assert.equal(await io.isAlive(anOrcaTarget()), false);
 });
@@ -316,7 +383,7 @@ test('isAlive answers false when the tab is absent from a good list', async () =
     agentStatus: async () => ({ isRunningAgent: false, status: null }),
     send: async () => ({ handle: 'term_a', accepted: true, bytesWritten: 0 })
   };
-  const io = createSessionIo({ tmux: makeTmuxMock(), orca });
+  const io = createSessionIo({ tmux: makeTmuxMock(), orca, ...noSleep });
 
   assert.equal(await io.isAlive(anOrcaTarget()), false);
 });
